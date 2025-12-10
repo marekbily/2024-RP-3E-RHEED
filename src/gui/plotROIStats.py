@@ -8,7 +8,8 @@ from camera.opencv_capture import CameraInit
 from gui.roiwidget import roiManagerWidget
 from gui.statswindow import roiStatsWindow
 from gui.about_menu import AboutWindow
-from gui.camera_menu import CameraMenuWindow
+from gui.camera_connect_menu import CameraConnectWindow
+from gui.camera_settings_menu import CameraSettingsWindow
 import gui.file_menu as file_menu
 from gui.file_menu import H5Playback
 
@@ -72,7 +73,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self.plot._StackView__dimensionsLabels.clear
         # change the plane widget label to a slider label for consistency
         self.plot._browser_label.setText("Slider (Frames):")
-        self.plot.layout().spacing = 5
+        self.baselayout = self.plot.layout()
+        if self.baselayout is not None:
+            self.baselayout.setSpacing(5)
 
         # create a none camera object placeholder
         self.camera = None
@@ -85,14 +88,33 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self.menu.setNativeMenuBar(False)
 
         # add file menu for video/dataset upload (h5py for now only)
-        file_action = qt.QAction("Video/Dataset Upload", self)
-        file_action.triggered.connect(self._file_menu)
-        self.menu.addAction(file_action)
+        file_menu = self.menu.addMenu("File")
+        video_upload_action = qt.QAction("Video upload", self)
+        dataset_upload_action = qt.QAction("H5 Dataset upload", self)
+        video_upload_action.triggered.connect(self._file_menu)
+        dataset_upload_action.triggered.connect(self._file_menu)
+        if file_menu is not None:
+            file_menu.addAction(video_upload_action)
+            file_menu.addAction(dataset_upload_action)
 
-        # add camera setup and launch
-        camera_action = qt.QAction("Camera Setup and Launch", self)
-        camera_action.triggered.connect(self._camera_menu)
-        self.menu.addAction(camera_action)
+
+        # add camera setup and launch dropdown
+        camera_menu = self.menu.addMenu("Camera")
+        connect_camera_action = qt.QAction("Connect camera", self)
+        connect_camera_action.triggered.connect(self._camera_connect_menu)
+        camera_setup_action = qt.QAction("Camera Settings", self)
+        camera_setup_action.triggered.connect(self._camera_settings_menu)
+        camera_recording_action = qt.QAction("Start/Stop Recording", self)
+        camera_recording_action.triggered.connect(self._camera_init)
+        if camera_menu is not None:
+            camera_menu.addAction(connect_camera_action)
+            camera_menu.addAction(camera_setup_action)
+            camera_menu.addAction(camera_recording_action)
+        #disable the camera setup if theer is no camera connected
+        if self.camera is None:
+            camera_setup_action.setEnabled(False)
+        else:
+            camera_setup_action.setEnabled(True)
 
         # add about window
         about_action = qt.QAction("About", self)
@@ -107,7 +129,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self._hiddenPlot2D.hide()
 
         # 1D roi management
-        self._curveRoiWidget = self.plot.getPlotWidget().getCurvesRoiDockWidget()
+        #self._curveRoiWidget = self.plot.getPlotWidget().getCurvesRoiDockWidget()
 
         # 2D - 3D roi manager
         self._regionManagerWidget = roiManagerWidget(parent=self, plot=self.plot.getPlotWidget())
@@ -123,19 +145,19 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         # create Dock widgets
         self._roisTabWidgetDockWidget = qt.QDockWidget(parent=self)
         self._roisTabWidgetDockWidget.setWidget(self._roisTabWidget)
-        self.addDockWidget(qt.Qt.RightDockWidgetArea, self._roisTabWidgetDockWidget)
+        self.addDockWidget(qt.Qt.DockWidgetArea.RightDockWidgetArea, self._roisTabWidgetDockWidget)
 
         # create Dock widgets
         self._roiStatsWindowDockWidget = qt.QDockWidget(parent=self)
         self._roiStatsWindowDockWidget.setWidget(self._statsWidget)
-        self.addDockWidget(qt.Qt.RightDockWidgetArea, self._roiStatsWindowDockWidget)
+        self.addDockWidget(qt.Qt.DockWidgetArea.RightDockWidgetArea, self._roiStatsWindowDockWidget)
 
         # Connect ROI signal to register ROI automatically
         self._regionManagerWidget.roiManager.sigRoiAdded.connect(self._statsWidget.registerRoi)
         self._regionManagerWidget.roiManager.sigRoiAboutToBeRemoved.connect(self._statsWidget.unregisterRoi)
 
         self._roisTabWidget.addTab(self._regionManagerWidget, "2D roi(s)")
-        self._roisTabWidget.addTab(self._curveRoiWidget, "1D roi(s)")
+        #self._roisTabWidget.addTab(self._curveRoiWidget, "1D roi(s)")
 
     def _file_menu(self):
         file_path = file_menu.open_h5_dataset_path()
@@ -146,18 +168,27 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             except Exception as e:
                 print(f"Failed to load HDF5 dataset: {e}")
         
-    def _camera_menu(self):
-        self.cmw = CameraMenuWindow()
+    def _camera_connect_menu(self):
+        self.cmw = CameraConnectWindow()
         self.cmw.show()
-        self.cmw.buttonClicked.connect(self._camera_init)
+        self.cmw.backendValuePicked.connect(self._camera_init)
 
-    def _camera_init(self):
-        self.camera = CameraInit(100)
+    def _camera_settings_menu(self):
+        self.cmw = CameraSettingsWindow()
+        self.cmw.show()
+
+    def _camera_init(self, port, backend, name):
+        print(f"Initializing camera on port {port} with backend {backend} and name {name}")
+        self.camera = CameraInit(100, port, backend, name)
 
         # create an icon button to sync the stackview and its FPS speed with the camera
         self.syncButton = qt.QPushButton("Sync", self)
-        self.syncButton.setIcon(self.style().standardIcon(qt.QStyle.SP_ArrowRight))
-        self.syncButton.setLayoutDirection(qt.Qt.RightToLeft)
+        app_style = self.style()
+        icon = qt.QIcon()
+        if app_style is not None:
+            icon = app_style.standardIcon(qt.QStyle.StandardPixmap.SP_BrowserReload)
+        self.syncButton.setIcon(icon)
+        self.syncButton.setLayoutDirection(qt.Qt.LayoutDirection.RightToLeft)
         self.syncButton.setIconSize(qt.QSize(20, 20))
         self.syncButton.setToolTip("Sync the stackview with the camera")
         self.syncButton.setCheckable(True)
@@ -184,7 +215,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
 
 
     def _sync_camera(self):
-        self.plot.setFrameNumber(self.camera.getCurrentFrame())
+        self.camera = self.camera
+        if self.camera is not None:
+            self.plot.setFrameNumber(self.camera.getCurrentFrame())
 
     def _camera_loop(self):
         if self.camera is not None and self.camera.cap.isOpened():

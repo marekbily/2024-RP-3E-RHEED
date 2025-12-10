@@ -1,7 +1,7 @@
 import silx.gui.qt as qt
 import os
 
-class CameraMenuWindow(qt.QMainWindow):
+class CameraSettingsWindowCopy(qt.QMainWindow):
     """Window for setting up and launching the camera."""
     buttonClicked = qt.Signal()
 
@@ -9,7 +9,7 @@ class CameraMenuWindow(qt.QMainWindow):
         super().__init__()
 
         # Force the window not to fullscreen
-        self.setWindowFlags(qt.Qt.Tool)
+        self.setWindowFlags(qt.Qt.WindowType.Tool)
         self.setWindowTitle("Camera Setup and Launch")
         self.resize(600, 400)
 
