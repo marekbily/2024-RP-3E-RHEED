@@ -35,7 +35,7 @@ class roiStatsWindow(qt.QWidget):
         self._timeseries.plot.setKeepDataAspectRatio(False)
         self._timeseries.plot.setActiveCurveHandling(False)
         self._timeseries.plot.setBackend("opengl")
-        self._timeseries.plot.setGraphGrid(True)
+        self._timeseries.plot.setGraphGrid(False)
         self._timeseries.hide()
 
         self._meanarray = {[roi.getName()]: numpy.array([]) for roi in self.statsWidget._rois}
@@ -69,6 +69,8 @@ class roiStatsWindow(qt.QWidget):
         """Add all ROIs to the stats widget and update the plot."""
         # Get all ROIs from the ROI manager
         try : 
+            if self._roiManager is None:
+                return
             rois = self._roiManager.getRois()
             for roi in rois:
                 self.statsWidget.registerROI(roi)
@@ -83,7 +85,8 @@ class roiStatsWindow(qt.QWidget):
     def showTimeseries(self):
             self.updateTimeseriesAsync()
             self._timeseries.show()
-            self._stackview.sigStackChanged.connect(self._dataset_size_changed)
+            if self._stackview is not None:
+                self._stackview.sigStackChanged.connect(self._dataset_size_changed)
 
     def _dataset_size_changed(self):
         """Update the x-axis limits of the time series plot when the dataset size changes."""
@@ -100,7 +103,7 @@ class roiStatsWindow(qt.QWidget):
         # Find the column index for the 'mean' stat.
         for col in range(table.columnCount()):
             header = table.horizontalHeaderItem(col)
-            if header and header.data(qt.Qt.UserRole) == 'mean':
+            if header and header.data(qt.Qt.ItemDataRole.UserRole) == 'mean':
                 meanColumn = col
                 break
 
@@ -116,7 +119,9 @@ class roiStatsWindow(qt.QWidget):
                 meanItem = table.item(row, meanColumn)
                 if meanItem:
                     try:
-                        meanValue = float(meanItem.text())
+                        #condition check for single point ROIs
+                        if meanItem.text() != "":
+                            meanValue = float(meanItem.text())
                     except ValueError:
                         print("Could not convert mean value to float")
                         meanValue = None

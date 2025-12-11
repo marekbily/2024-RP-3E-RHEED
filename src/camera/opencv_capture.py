@@ -20,7 +20,7 @@ class CameraInit:
             self.on_resize: Callable[[Any], None] | None = None
 
             # Check for a config file and load the camera port
-            if os.path.exists("camera_config.txt"):
+            """if os.path.exists("camera_config.txt"):
                 with open("camera_config.txt", "r") as f:
                     #self.camera_port = int(f.readline())
                     f.close()
@@ -28,7 +28,8 @@ class CameraInit:
                 qt.QMessageBox.warning(None, "Camera Config Error", "Failed to load camera configuration. "+
                                         "Check if the camera_config.txt file exists. Always use Camera Setup and Launch menu to "+
                                         "configure the camera settings and launch the camera.")
-
+            """
+            
             # Callback for resizing the dataset
             self.cache_folder = "cacheimg"
             os.makedirs(self.cache_folder, exist_ok=True)
@@ -49,7 +50,7 @@ class CameraInit:
                 return
 
             # Check for a config file
-            if os.path.exists("camera_config.txt"):
+            """if os.path.exists("camera_config.txt"):
                 with open("camera_config.txt", "r") as f:
                     self.camera_port = int(f.readline())
                     self.cap.set(cv2.CAP_PROP_SETTINGS, 1)
@@ -79,11 +80,12 @@ class CameraInit:
                 qt.QMessageBox.warning(None, "Camera Config Error", "Failed to load camera configuration. "+
                                         "Check if the camera_config.txt file exists. Always use Camera Setup and Launch menu to "+
                                         "configure the camera settings and launch the camera.")
+            """
             
             # test frame capture and set the frame size
             ret, frame = self.cap.read()
             if not ret:
-                qt.QMessageBox.warning(None, "Camera Error", "Failed to capture frame. Check if the camera is connected.")
+                qt.QMessageBox.warning(None, "Camera Error", "Failed to capture frame. Check if the camera is connected")
                 return
             
             # Convert to grayscale

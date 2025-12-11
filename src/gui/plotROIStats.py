@@ -100,21 +100,32 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
 
         # add camera setup and launch dropdown
         camera_menu = self.menu.addMenu("Camera")
+
         connect_camera_action = qt.QAction("Connect camera", self)
         connect_camera_action.triggered.connect(self._camera_connect_menu)
-        camera_setup_action = qt.QAction("Camera Settings", self)
-        camera_setup_action.triggered.connect(self._camera_settings_menu)
-        camera_recording_action = qt.QAction("Start/Stop Recording", self)
-        camera_recording_action.triggered.connect(self._camera_init)
+
+        if os.name == "nt":
+            camera_dshow_settings_action = qt.QAction("DirectShow Settings", self)
+            camera_dshow_settings_action.triggered.connect(self._camera_dshow_settings_menu)
+        
+        camera_settings_action = qt.QAction("Camera Settings", self)
+        camera_settings_action.triggered.connect(self._camera_settings_menu)
+
+        camera_recording_action = qt.QAction("Recording", self)
+
         if camera_menu is not None:
             camera_menu.addAction(connect_camera_action)
-            camera_menu.addAction(camera_setup_action)
+            if camera_dshow_settings_action is not None:
+                camera_menu.addAction(camera_dshow_settings_action)
+            camera_menu.addAction(camera_settings_action)
             camera_menu.addAction(camera_recording_action)
-        #disable the camera setup if theer is no camera connected
-        if self.camera is None:
-            camera_setup_action.setEnabled(False)
-        else:
-            camera_setup_action.setEnabled(True)
+            camera_menu.aboutToShow.connect(self._update_camera_menu_state)
+        
+        # Store menu actions for later enable/disable
+        self.camera_settings_action = camera_settings_action
+        self.camera_recording_action = camera_recording_action
+        self.camera_dshow_settings_action = camera_dshow_settings_action if os.name == "nt" else None
+        
 
         # add about window
         about_action = qt.QAction("About", self)
@@ -173,45 +184,63 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self.cmw.show()
         self.cmw.backendValuePicked.connect(self._camera_init)
 
+    def _camera_dshow_settings_menu(self):
+        if self.camera is not None:
+            if self.camera.getBackend() == "DSHOW":
+                self.camera.openDSHOWSettings()
+    
     def _camera_settings_menu(self):
-        self.cmw = CameraSettingsWindow()
-        self.cmw.show()
+        if self.camera is not None:
+            self.cmw = CameraSettingsWindow(camera_init=self.camera)
+            self.cmw.show()
 
     def _camera_init(self, port, backend, name):
-        print(f"Initializing camera on port {port} with backend {backend} and name {name}")
-        self.camera = CameraInit(100, port, backend, name)
+        try:
+            print(f"Initializing camera on port {port} with backend {backend} and name {name}")
+            self.camera = CameraInit(100, port, backend, name)
 
-        # create an icon button to sync the stackview and its FPS speed with the camera
-        self.syncButton = qt.QPushButton("Sync", self)
-        app_style = self.style()
-        icon = qt.QIcon()
-        if app_style is not None:
-            icon = app_style.standardIcon(qt.QStyle.StandardPixmap.SP_BrowserReload)
-        self.syncButton.setIcon(icon)
-        self.syncButton.setLayoutDirection(qt.Qt.LayoutDirection.RightToLeft)
-        self.syncButton.setIconSize(qt.QSize(20, 20))
-        self.syncButton.setToolTip("Sync the stackview with the camera")
-        self.syncButton.setCheckable(True)
-        self.syncButton.clicked.connect(self._sync_camera)
-        self.syncButton.toggled.connect(self._sync_camera)
-        # add the sync button to the slider browser layout
-        self.plot._browser.mainLayout.addWidget(self.syncButton)
-        self.plot._browser.setFrameRate(int(self.camera.getFPS()))
-        self.plot._browser.setContentsMargins(0, 0, 15, 0)
+            # create an icon button to sync the stackview and its FPS speed with the camera
+            self.syncButton = qt.QPushButton("Sync", self)
+            app_style = self.style()
+            icon = qt.QIcon()
+            if app_style is not None:
+                icon = app_style.standardIcon(qt.QStyle.StandardPixmap.SP_BrowserReload)
+            self.syncButton.setIcon(icon)
+            self.syncButton.setLayoutDirection(qt.Qt.LayoutDirection.RightToLeft)
+            self.syncButton.setIconSize(qt.QSize(20, 20))
+            self.syncButton.setToolTip("Sync the stackview with the camera")
+            self.syncButton.setCheckable(True)
+            self.syncButton.clicked.connect(self._sync_camera)
+            self.syncButton.toggled.connect(self._sync_camera)
+            # add the sync button to the slider browser layout
+            self.plot._browser.mainLayout.addWidget(self.syncButton)
+            self.plot._browser.setFrameRate(int(self.camera.getFPS()))
+            self.plot._browser.setContentsMargins(0, 0, 15, 0)
 
-        # populate the stackview with the camera dataset
-        self.plot.setStack(self.camera.image_dataset)
-        self.plot.setFrameNumber(0)
+            # populate the stackview with the camera dataset
+            self.plot.setStack(self.camera.image_dataset)
+            self.plot.setFrameNumber(0)
 
-        # connect the resize callback to the camera
-        self.camera.on_resize = lambda new_dataset: self.dataResized.emit(self.plot, new_dataset)
+            # connect the resize callback to the camera
+            self.camera.on_resize = lambda new_dataset: self.dataResized.emit(self.plot, new_dataset)
 
-        # connect the resize signal to the plot
-        self.dataResized.connect(self.update_dataset)
-        
-        self.timer = qt.QTimer(self)
-        self.timer.timeout.connect(self._camera_loop)
-        self.timer.start(int(self.camera.getFPS()/1000))
+            # connect the resize signal to the plot
+            self.dataResized.connect(self.update_dataset)
+            
+            self.timer = qt.QTimer(self)
+            self.timer.timeout.connect(self._camera_loop)
+            self.timer.start(int(self.camera.getFPS()/1000))
+        except Exception as e:
+            print(f"Failed to initialize camera: {e}")
+
+
+    def _update_camera_menu_state(self):
+        """Update camera menu actions based on camera connection state."""
+        is_connected = self.camera is not None
+        self.camera_settings_action.setEnabled(is_connected)
+        self.camera_recording_action.setEnabled(is_connected)
+        if self.camera_dshow_settings_action is not None:
+            self.camera_dshow_settings_action.setEnabled(is_connected)
 
 
     def _sync_camera(self):
