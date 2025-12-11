@@ -39,6 +39,7 @@ class roiStatsWindow(qt.QWidget):
         self._timeseries.hide()
 
         self._meanarray = {[roi.getName()]: numpy.array([]) for roi in self.statsWidget._rois}
+        self._first_frames = {[roi.getName()]: int for roi in self.statsWidget._rois}
 
         ''' Main layout for the custom widget
         layout = qt.QVBoxLayout(self)
@@ -55,7 +56,7 @@ class roiStatsWindow(qt.QWidget):
         btnLayout.addWidget(roisbutton)
         btnLayout.addWidget(timeseriesbutton)
 
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(5)
         layout.addWidget(self.statsWidget)
         layout.addLayout(btnLayout)
@@ -158,6 +159,7 @@ class roiStatsWindow(qt.QWidget):
         self.worker = TimeseriesWorker(
             rois=self.statsWidget._rois,
             meanarray=self._meanarray,
+            first_frames=self._first_frames,
             getMeanFunc=self._getMeanForROI,
             frameNumber=framenum
         )
@@ -173,11 +175,12 @@ class roiStatsWindow(qt.QWidget):
 class TimeseriesWorker(qt.QThread):
     updated = qt.Signal(dict)
 
-    def __init__(self, rois, meanarray, getMeanFunc, frameNumber):
+    def __init__(self, rois, meanarray, first_frames, getMeanFunc, frameNumber):
         super().__init__()
         self._running = True
         self.rois = rois
         self.meanarray = meanarray
+        self.first_frames = first_frames
         self.getMean = getMeanFunc
         self.framenum = frameNumber
 
@@ -192,13 +195,15 @@ class TimeseriesWorker(qt.QThread):
 
             new_value = self.getMean(roi)
             if new_value is not None:
-                self.meanarray[name] = numpy.append(self.meanarray[name], new_value)
+                if self.meanarray[name].size < self.framenum + 1:
+                    self.meanarray[name] = numpy.resize(self.meanarray[name], self.framenum + 100)
+                self.meanarray[name][self.framenum] = new_value
 
-                x = numpy.arange(self.framenum)
-                y = self.meanarray[name][:self.framenum]
+                x = numpy.arange(self.framenum + 1)
+                y = self.meanarray[name][:self.framenum + 1]
 
-                if x.size != y.size:
-                    y = numpy.resize(y, x.size)
+                #if x.size != y.size:
+                #    y = numpy.resize(y, x.size)
 
                 result[name] = (x, y, roi.getColor())
 

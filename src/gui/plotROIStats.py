@@ -197,7 +197,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
     def _camera_init(self, port, backend, name):
         try:
             print(f"Initializing camera on port {port} with backend {backend} and name {name}")
-            self.camera = CameraInit(100, port, backend, name)
+            self.camera = CameraInit(2000, port, backend, name)
 
             # create an icon button to sync the stackview and its FPS speed with the camera
             self.syncButton = qt.QPushButton("Sync", self)
