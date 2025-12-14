@@ -12,6 +12,7 @@ from gui.camera_connect_menu import CameraConnectWindow
 from gui.camera_settings_menu import CameraSettingsWindow
 import gui.file_menu as file_menu
 from gui.file_menu import H5Playback
+import numpy as np
 
 
 class plotUpdateThread(qt.QThread):
@@ -37,7 +38,7 @@ class plotUpdateThread(qt.QThread):
             if self.window.camera is not None:
                 if self.window.camera.cap.isOpened():
                     self.window.camera.capture_frame()
-                    time.sleep((self.window.camera.getFPS())/1000)
+                    time.sleep(1/(self.window.camera.getFPS()))
             if self.window.syncButton is not None and self.window.syncButton.isChecked():
                 self.window._sync_camera()
             #_framenum = self.plot2d.getFrameNumber()
@@ -58,8 +59,8 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
     """Signal to emit when the data is resized"""
     dataResized = qt.Signal(object, object)
 
-    def __init__(self, parent=None, mode=None):
-        qt.QMainWindow.__init__(self, parent)
+    def __init__(self):
+        qt.QMainWindow.__init__(self)
         self.plot = StackView(parent=self, backend="gl")
         self.setCentralWidget(self.plot)
         self.setWindowTitle("RHEED Analysis")
@@ -171,10 +172,10 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         #self._roisTabWidget.addTab(self._curveRoiWidget, "1D roi(s)")
 
     def _file_menu(self):
-        file_path = file_menu.open_h5_dataset_path()
+        file_path = file_menu.open_file_path("vid")
         if file_path is not None:
             try:
-                self.plot.setStack(H5Playback(file_path).image_dataset)
+                self.plot.setStack(H5Playback(file_path, "vid").image_dataset)
                 self.plot.setFrameNumber(0)
             except Exception as e:
                 print(f"Failed to load HDF5 dataset: {e}")
@@ -194,11 +195,19 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self.cmw = CameraSettingsWindow(camera_init=self.camera)
             self.cmw.show()
 
-    def _camera_init(self, port, backend, name):
+    def _camera_init(self, port, backend, name, fps):
         try:
+            if self.camera is not None:
+                # Clear the StackView reference to the old dataset BEFORE cleanup
+                self.plot.setStack(None)
+                self.camera.cleanup()
+                self.camera = None
             print(f"Initializing camera on port {port} with backend {backend} and name {name}")
-            self.camera = CameraInit(2000, port, backend, name)
+            self.camera = CameraInit(2000, port, backend, name, fps)
 
+            if self.syncButton is not None:
+                self.syncButton.deleteLater()
+                self.syncButton = None
             # create an icon button to sync the stackview and its FPS speed with the camera
             self.syncButton = qt.QPushButton("Sync", self)
             app_style = self.style()
@@ -217,9 +226,12 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self.plot._browser.setFrameRate(int(self.camera.getFPS()))
             self.plot._browser.setContentsMargins(0, 0, 15, 0)
 
-            # populate the stackview with the camera dataset
-            self.plot.setStack(self.camera.image_dataset)
-            self.plot.setFrameNumber(0)
+
+
+            # populate the stackview with the live single-frame buffer
+            if self.camera.latest_frame is not None:
+                self.plot.setStack(self.camera.latest_frame)
+                self.plot.setFrameNumber(0)
 
             # connect the resize callback to the camera
             self.camera.on_resize = lambda new_dataset: self.dataResized.emit(self.plot, new_dataset)
@@ -227,21 +239,32 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             # connect the resize signal to the plot
             self.dataResized.connect(self.update_dataset)
             
+            # create and start a timer to capture frames at the camera FPS rate
             self.timer = qt.QTimer(self)
+            # Compute integer interval from FPS
+            try:
+                fps_val = float(self.camera.getFPS())
+                if fps_val > 0:
+                    interval_ms = int(round(1000 / fps_val))
+                else:
+                    interval_ms = 1000  # ~1 FPS fallback
+            except Exception:
+                interval_ms = 1000  # fallback if getFPS fails
+
+            self.timer.start(interval_ms)
             self.timer.timeout.connect(self._camera_loop)
-            self.timer.start(int(self.camera.getFPS()/1000))
+
         except Exception as e:
             print(f"Failed to initialize camera: {e}")
 
 
     def _update_camera_menu_state(self):
         """Update camera menu actions based on camera connection state."""
-        is_connected = self.camera is not None
+        is_connected = self.camera is not None and self.camera.cap is not None and self.camera.cap.isOpened()
         self.camera_settings_action.setEnabled(is_connected)
         self.camera_recording_action.setEnabled(is_connected)
         if self.camera_dshow_settings_action is not None:
             self.camera_dshow_settings_action.setEnabled(is_connected)
-
 
     def _sync_camera(self):
         self.camera = self.camera
@@ -251,6 +274,11 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
     def _camera_loop(self):
         if self.camera is not None and self.camera.cap.isOpened():
             self.camera.capture_frame()
+            # Update live display from the single-frame buffer: rebind to trigger UI refresh
+            if self.camera.latest_frame is not None:
+                self.plot.setStack(self.camera.latest_frame)
+                self.plot.setFrameNumber(0)
+            # Sync stackview frame number with camera frame number
             if self.syncButton is not None and self.syncButton.isChecked():
                 self._sync_camera()
             
@@ -284,32 +312,11 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         plot.setStack(dataset)
         plot.setFrameNumber(framenum)
 
-def example_image(mode):
+def main():
     app = qt.QApplication([])
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "img", "logo.png")
-    app.setWindowIcon(qt.QIcon(icon_path))
-    app.quitOnLastWindowClosed()
     window = _RoiStatsDisplayExWindow()
-    #t = plotUpdateThread(window)
-    #t.start()
     window.show()
     app.exec()
 
-def main(argv):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--items",
-        dest="items",
-        default="curves+images",
-        help="items type(s), can be curve, image, curves+images",
-    )
-    parser.add_argument(
-        "--mode", dest="mode", default="manual", help="valid modes are `auto` or `manual`"
-    )
-    options = parser.parse_args(argv[1:])
-
-    items = options.items.lower()
-    if items == "curves+images":  
-        example_image(mode=options.mode)
-    else:
-        raise ValueError("invalid entry for item type")
+if __name__ == "__main__":
+    main()

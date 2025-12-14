@@ -4,15 +4,17 @@ import cv2.videoio_registry as cv2_reg
 import camera.opencv_capture as cap
 import cv2_enumerate_cameras as cv2_enum
 
-class CameraConnectWindow(qt.QMainWindow):
+class RecordingMenu(qt.QMainWindow):
     """Window for setting up and launching the camera."""
     backendValuePicked = qt.Signal(int, int, str, float) # port, backend, name, fps
 
     def __init__(self):
         super().__init__()
 
+        cv2_enum.supported_backends
+
         # Force the window not to fullscreen
-        self.setWindowTitle("Camera Selection and Launch")
+        self.setWindowTitle("Camera Setup and Launch")
         self.resize(250, 200)
 
         self.centralWidget = qt.QWidget(self)
@@ -28,7 +30,7 @@ class CameraConnectWindow(qt.QMainWindow):
         for backend in cv2_enum.supported_backends:
             self.backend_combo.addItem(cv2_reg.getBackendName(backend))
         self.hlayout.addWidget(self.backend_combo)
-        self.backend_combo.currentIndexChanged.connect(self._refresh_camera_list)
+        self.backend_combo.currentIndexChanged.connect(self.refresh_camera_list)
 
         self.h2layout = qt.QHBoxLayout()
         self.vlayout.addLayout(self.h2layout)
@@ -43,9 +45,9 @@ class CameraConnectWindow(qt.QMainWindow):
         self.vlayout.addWidget(self.list_widget)
 
         self.refresh_button = qt.QPushButton("Refresh Camera List", self)
-        self.refresh_button.clicked.connect(self._refresh_camera_list)
+        self.refresh_button.clicked.connect(self.refresh_camera_list)
         self.vlayout.addWidget(self.refresh_button)
-        self._refresh_camera_list()
+        self.refresh_camera_list()
 
         # Create a button to save the updated config values
         save_button = qt.QPushButton("Save and Launch Camera", self)
@@ -75,11 +77,11 @@ class CameraConnectWindow(qt.QMainWindow):
         self.backendValuePicked.emit(port, backend, name, fps)
         self.close()
 
-    def _refresh_camera_list(self):
+    def refresh_camera_list(self):
         self.list_widget.clear()
+        print(cv2_enum.supported_backends)
+        print(cv2_enum.enumerate_cameras())
         camera_ports = cv2_enum.enumerate_cameras(cv2_enum.supported_backends[self.backend_combo.currentIndex()])
-        for camera in camera_ports:
-            item = qt.QListWidgetItem(f"Camera {camera}:")
+        for port in camera_ports:
+            item = qt.QListWidgetItem(f"Port {port}:")
             self.list_widget.addItem(item)
-        if not camera_ports:
-            qt.QMessageBox.information(self, "No Cameras Found", "No cameras were found with the selected backend.")
