@@ -15,11 +15,12 @@ class roiStatsWindow(qt.QWidget):
     def __init__(self, parent=None, plot=None, stackview=None, roimanager=None):
         """
         Create a window that embeds the stats widget and button for showing _timeseries of the ROIs.
+        stackview can be either a StackView or Plot2D instance.
         """
         assert plot is not None
         qt.QMainWindow.__init__(self, parent)
         self._plot2d = plot
-        self._stackview = stackview
+        self._view = stackview
         layout = qt.QVBoxLayout(self)
         self.statsWidget = ROIStatsWidget(plot=self._plot2d)
         self._roiManager = roimanager
@@ -86,12 +87,17 @@ class roiStatsWindow(qt.QWidget):
     def showTimeseries(self):
             self.updateTimeseriesAsync()
             self._timeseries.show()
-            if self._stackview is not None:
-                self._stackview.sigStackChanged.connect(self._dataset_size_changed)
+            if self._view is not None:
+                # Connect appropriate signal based on view type
+                if isinstance(self._view, StackView):
+                    self._view.sigStackChanged.connect(self._dataset_size_changed)
+                else:
+                    # For Plot2D, connect to active image changed signal
+                    self._view.sigActiveImageChanged.connect(self._dataset_size_changed)
 
     def _dataset_size_changed(self):
         """Update the x-axis limits of the time series plot when the dataset size changes."""
-        #(data, info) = self._stackview.getStack(copy=True, returnNumpyArray=True)
+        #(data, info) = self._view.getStack(copy=True, returnNumpyArray=True)
         #print(data.size)
         #self._timeseries.plot.setGraphXLimits(0, data.size)
 
@@ -155,7 +161,18 @@ class roiStatsWindow(qt.QWidget):
         #self._statsWidget
 
     def updateTimeseriesAsync(self):
-        framenum = self._stackview.getFrameNumber()
+        
+        if self._view is None:
+            print("Warning: view not set for timeseries update")
+            return
+        
+        # Get frame number based on view type
+        if isinstance(self._view, StackView):
+            framenum = self._view.getFrameNumber()
+        else:
+            # For Plot2D, frame number is 0 to signalize real-time view mode
+            framenum = None
+        
         self.worker = TimeseriesWorker(
             rois=self.statsWidget._rois,
             meanarray=self._meanarray,
@@ -182,7 +199,10 @@ class TimeseriesWorker(qt.QThread):
         self.meanarray = meanarray
         self.first_frames = first_frames
         self.getMean = getMeanFunc
-        self.framenum = frameNumber
+        if frameNumber is None:
+            self.framenum = max((meanarray[roi].size - 1 for roi in meanarray.keys()), default=0) + 1
+        else:
+            self.framenum = frameNumber
 
     def run(self):
         result = {}
@@ -196,7 +216,7 @@ class TimeseriesWorker(qt.QThread):
             new_value = self.getMean(roi)
             if new_value is not None:
                 if self.meanarray[name].size < self.framenum + 1:
-                    self.meanarray[name] = numpy.resize(self.meanarray[name], self.framenum + 1000)
+                    self.meanarray[name] = numpy.resize(self.meanarray[name], self.framenum + 2)
                 self.meanarray[name][self.framenum] = new_value
 
                 x = numpy.arange(self.framenum + 1)

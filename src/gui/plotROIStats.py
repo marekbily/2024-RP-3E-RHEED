@@ -61,28 +61,33 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
 
     def __init__(self):
         qt.QMainWindow.__init__(self)
-        self.plot = StackView(parent=self, backend="gl")
+        #self.plot = StackView(parent=self, backend="gl")
+        self.plot = Plot2D(parent=self, backend="gl")
         self.setCentralWidget(self.plot)
         self.setWindowTitle("RHEED Analysis")
-        self.plot.setColormap("green")
         self.plot.setKeepDataAspectRatio(True)
         self.plot.setYAxisInverted(True)
         # remove unnecessary plane selection widget
-        self.plot._StackView__planeSelection.setVisible(False)
-        self.plot._StackView__planeSelection.setEnabled(False)
-        #self.plot._StackView__dimensionsLabels.setVisible(False)
-        self.plot._StackView__dimensionsLabels.clear
-        # change the plane widget label to a slider label for consistency
-        self.plot._browser_label.setText("Slider (Frames):")
+        if isinstance(self.plot, StackView):
+            self.plot._StackView__planeSelection.setVisible(False)
+            self.plot._StackView__planeSelection.setEnabled(False)
+            #self.plot._StackView__dimensionsLabels.setVisible(False)
+            self.plot._StackView__dimensionsLabels.clear()
+            self.plot.setColormap("green")
+            # change the plane widget label to a slider label for consistency
+            self.plot._browser_label.setText("Slider (Frames):")
         self.baselayout = self.plot.layout()
         if self.baselayout is not None:
-            self.baselayout.setSpacing(5)
+            self.baselayout.setSpacing(2)
 
         # create a none camera object placeholder
         self.camera = None
 
         # create a none sync button placeholder
         self.syncButton = None
+        
+        # store current frame for stats calculations
+        self.current_frame = None
 
         # create a menu bar
         self.menu = qt.QMenuBar(self)
@@ -144,15 +149,21 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         #self._curveRoiWidget = self.plot.getPlotWidget().getCurvesRoiDockWidget()
 
         # 2D - 3D roi manager
-        self._regionManagerWidget = roiManagerWidget(parent=self, plot=self.plot.getPlotWidget())
+        #self._regionManagerWidget = roiManagerWidget(parent=self, plot=self.plot.getPlotWidget())
+        self._regionManagerWidget = roiManagerWidget(parent=self, plot=self.plot)
         
         # tabWidget for displaying the rois
         self._roisTabWidget = qt.QTabWidget(parent=self)
 
          # widget for displaying stats results and update mode
         self._statsWidget = roiStatsWindow(parent=self, plot=self._hiddenPlot2D, stackview=self.plot, roimanager=self._regionManagerWidget.roiManager)
-        self.plot.sigFrameChanged.connect(self._update_hidden_plot)
-        self.plot.sigFrameChanged.connect(self._statsWidget.updateTimeseriesAsync)
+        if isinstance(self.plot, StackView):
+            self.plot.sigFrameChanged.connect(self._update_hidden_plot)
+            self.plot.sigFrameChanged.connect(self._statsWidget.updateTimeseriesAsync)
+        else:
+            self.plot.sigActiveImageChanged.connect(self._update_hidden_plot)
+            self.plot.sigActiveImageChanged.connect(self._statsWidget.updateTimeseriesAsync)
+        
 
         # create Dock widgets
         self._roisTabWidgetDockWidget = qt.QDockWidget(parent=self)
@@ -199,7 +210,8 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         try:
             if self.camera is not None:
                 # Clear the StackView reference to the old dataset BEFORE cleanup
-                self.plot.setStack(None)
+                if isinstance(self.plot, StackView):
+                    self.plot.setStack(None)
                 self.camera.cleanup()
                 self.camera = None
             print(f"Initializing camera on port {port} with backend {backend} and name {name}")
@@ -222,16 +234,22 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self.syncButton.clicked.connect(self._sync_camera)
             self.syncButton.toggled.connect(self._sync_camera)
             # add the sync button to the slider browser layout
-            self.plot._browser.mainLayout.addWidget(self.syncButton)
-            self.plot._browser.setFrameRate(int(self.camera.getFPS()))
-            self.plot._browser.setContentsMargins(0, 0, 15, 0)
-
-
+            if isinstance(self.plot, StackView):
+                self.plot._browser.mainLayout.addWidget(self.syncButton)
+                self.plot._browser.setFrameRate(int(self.camera.getFPS()))
+                self.plot._browser.setContentsMargins(0, 0, 15, 0)
 
             # populate the stackview with the live single-frame buffer
             if self.camera.latest_frame is not None:
-                self.plot.setStack(self.camera.latest_frame)
-                self.plot.setFrameNumber(0)
+                print(self.camera.latest_frame.shape)
+                # Remove first dimension if present (1, H, W) -> (H, W)
+                frame = self.camera.latest_frame[0] if self.camera.latest_frame.ndim == 3 else self.camera.latest_frame
+                self.current_frame = frame
+                self.plot.addImage(frame)
+                self._hiddenPlot2D.addImage(frame)
+                if isinstance(self.plot, StackView):
+                    self.plot.setStack(self.camera.latest_frame)
+                    self.plot.setFrameNumber(0)
 
             # connect the resize callback to the camera
             self.camera.on_resize = lambda new_dataset: self.dataResized.emit(self.plot, new_dataset)
@@ -276,8 +294,15 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self.camera.capture_frame()
             # Update live display from the single-frame buffer: rebind to trigger UI refresh
             if self.camera.latest_frame is not None:
-                self.plot.setStack(self.camera.latest_frame)
-                self.plot.setFrameNumber(0)
+                print("Updating live camera frame in plot")
+                # Remove first dimension if present (1, H, W) -> (H, W)
+                frame = self.camera.latest_frame[0] if self.camera.latest_frame.ndim == 3 else self.camera.latest_frame
+                self.current_frame = frame
+                if isinstance(self.plot, StackView):
+                    self.plot.setStack(self.camera.latest_frame)
+                else:
+                    self.plot.addImage(frame)
+                    self._hiddenPlot2D.addImage(frame)
             # Sync stackview frame number with camera frame number
             if self.syncButton is not None and self.syncButton.isChecked():
                 self._sync_camera()
@@ -298,10 +323,15 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
 
     def _update_hidden_plot(self, index):
         try:
-            frame = self.plot._stack[self.plot.getFrameNumber()]
-            if frame is None or frame.size == 0:
-                return
-            self._hiddenPlot2D.addImage(frame)
+            if isinstance(self.plot, StackView):
+                frame = self.plot._stack[self.plot.getFrameNumber()]
+                if frame is None or (hasattr(frame, 'size') and frame.size == 0):
+                    return
+                # Ensure frame is 2D for Plot2D
+                if frame.ndim == 3:
+                    frame = frame[0] if frame.shape[0] == 1 else frame
+                self._hiddenPlot2D.addImage(frame)
+            # For Plot2D, hidden plot is already updated in camera loop
             self._statsWidget.statsWidget._updateAllStats()
         except Exception as e:
             print(f"Failed to update hidden plot: {e}")
