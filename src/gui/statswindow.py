@@ -215,7 +215,7 @@ class TimeseriesWorker(qt.QThread):
 
             new_value = self.getMean(roi)
             if new_value is not None:
-                if self.meanarray[name].size < self.framenum + 1:
+                if self.meanarray[name].size == self.framenum:
                     self.meanarray[name] = numpy.resize(self.meanarray[name], self.framenum + 2)
                 self.meanarray[name][self.framenum] = new_value
 

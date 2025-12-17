@@ -1,7 +1,7 @@
 from silx.gui import qt
 from silx.gui.plot.tools.roi import RegionOfInterestManager, RegionOfInterestTableWidget, RoiModeSelectorAction
 from silx.io import dictdump
-import gui.roidictionary as rdict
+import gui.roidictionary as roidict
 import datetime
 
 class roiManagerWidget(qt.QWidget):
@@ -42,7 +42,8 @@ class roiManagerWidget(qt.QWidget):
         btnLayout.addWidget(self.saveButton)
         
         # Create the silx 2D ROI manager and table
-        self.roiManager = RegionOfInterestManager(parent=plot)
+        print(self.plot)
+        self.roiManager = RegionOfInterestManager(parent=self.plot)
         self._roiTable = RegionOfInterestTableWidget()
         self._roiTable.setRegionOfInterestManager(self.roiManager)
 
@@ -93,16 +94,9 @@ class roiManagerWidget(qt.QWidget):
     # Save ROIs to a file
     def _save(self, filename):
         # Collect ROI data similar to the curvesROI widget's save method
-        '''roilist = []
-        roidict = {}
-        for roi in self.roiManager.getRois():
-            roilist.append(roi.getRoi())
-            roidict[roi.getName()] = rdict.save_rois_to_file(roi)
-        datadict = {"ROI": {"roilist": roilist, "roidict": roidict}}
-        dictdump.dump(datadict, filename)'''
         # Save the ROI data to a file
         rois = self.roiManager.getRois()
-        rdict.save_rois_to_file(rois, filename)
+        roidict.save_rois_to_file(rois, filename)
     
     # File dialog to load from file
     def loadROIs(self):
@@ -115,20 +109,8 @@ class roiManagerWidget(qt.QWidget):
     
     # Load ROIs from a file
     def _load(self, filename):
-        '''datadict = dictdump.load(filename)
-        rois = []
-        # Recreate ROI objects from the loaded dictionary
-        for roiDict in datadict["ROI"]["roidict"].values():
-            # Remove keys that might not be needed
-            roiDict.pop("rawcounts", None)
-            roiDict.pop("netcounts", None)
-            # Use the ROI class’s _fromDict method
-            from silx.gui.plot.tools.roi import ROI  # Adjust the import if needed
-            roi = rdict.roi_from_dict(roiDict)
-            rois.append(roi)
-        self.roiTable.setRois(rois)'''
         # Load the ROI data from a file
-        rois = rdict.load_rois_from_file(filename)
+        rois = roidict.load_rois_from_file(filename)
         for each in rois:
             self.roiManager.addRoi(each)
 

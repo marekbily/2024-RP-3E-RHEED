@@ -3,6 +3,7 @@ import imageio.v3 as iio
 import imageio_ffmpeg
 import h5py
 import numpy as np
+import os
 
 class H5Playback:
     """Class for reading and playing back 3D datasets from an H5 file."""
@@ -38,6 +39,12 @@ class H5Playback:
     def capture_frame(self):
         frame = self.image_dataset[self.frame_index]
         return frame
+    
+    def close(self):
+        """Close the H5 file if open."""
+        if self.h5_file is not None:
+            self.h5_file.close()
+            self.h5_file = None
 
 """Open a file dialog to select a file and return the path."""
 def open_file_path(type: str):
@@ -59,6 +66,17 @@ def open_file_path(type: str):
 """Convert any video file to H5 format and return the H5 file path."""
 def convert_video_to_h5(video_path):
     h5_path = video_path.rsplit('.', 1)[0] + '.h5'
+    
+    # Validate existing H5; if corrupted, delete and reconvert
+    if os.path.exists(h5_path):
+        try:
+            with h5py.File(h5_path, 'r') as f:
+                # Quick validation: check if we can read it
+                if len(f.keys()) > 0:
+                    return h5_path
+        except (OSError, Exception):
+            # Corrupted file; remove it and reconvert
+            os.remove(h5_path)
 
     with h5py.File(h5_path, 'w') as h5_file:
         frame_iter = iio.imiter(video_path)
