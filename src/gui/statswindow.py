@@ -10,6 +10,7 @@ class roiStatsWindow(qt.QWidget):
 
     STATS = [
     ("mean", numpy.mean),
+    ("value", float)
     ]
 
     def __init__(self, parent=None, plot=None, stackview=None, roimanager=None):
@@ -102,9 +103,13 @@ class roiStatsWindow(qt.QWidget):
         #self._timeseries.plot.setGraphXLimits(0, data.size)
 
     def _getMeanForROI(self, roi):
+        print(roi)
         """Return the current computed mean stat for the given ROI.
-        This reads the value from the internal _statsROITable.
+        This reads the value from the internal _statsROITable. For 0D ROIs it returns the value.
         """
+        handler = self.statsWidget.getStatsHandler()
+        print(handler.stats)
+        handler.stats.add() 
         table = self.statsWidget._statsROITable
         meanColumn = None
         # Find the column index for the 'mean' stat.
