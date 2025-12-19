@@ -27,10 +27,10 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self.setWindowTitle("RHEED Analysis")
         # create a none camera object placeholder
         self.camera = None
-        # Temporarily set plot to Plot2D; will be replaced on file load or camera init
+        # View for holding objects like StackView, plot for holding the Plot component of the object
         self.view = None
         self.plot = None
-        self._init_Plot2D()
+        self._init_StackView()
 
         # create a none sync button placeholder
         self.syncButton = None
@@ -91,9 +91,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         # add menu to the window
         self.setMenuBar(self.menu)
 
-        # hidden plot2D for stats
+        """# hidden plot2D for stats
         self._hiddenPlot2D = Plot2D()  # not added to layout
-        self._hiddenPlot2D.hide()
+        self._hiddenPlot2D.hide()"""
 
         # Placeholder; ROI manager will be created when the plot is (re)created
         self._regionManagerWidget = None
@@ -103,16 +103,13 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self._roisTabWidget = qt.QTabWidget(parent=self)
 
         # Create ROI manager and attach to tab
-        self._regionManagerWidget = roiManagerWidget(parent=self, plot=self.view)
+        self._regionManagerWidget = roiManagerWidget(parent=self, plot=self.plot)
 
          # widget for displaying stats results
-        self._statsWidget = roiStatsWindow(parent=self, plot=self._hiddenPlot2D, stackview=self.plot, roimanager=self._regionManagerWidget.roiManager)
-        if isinstance(self.plot, StackView):
-            self.plot.sigFrameChanged.connect(self._update_hidden_plot)
-            self.plot.sigFrameChanged.connect(self._statsWidget.updateTimeseriesAsync)
-        else:
-            self.plot.sigActiveImageChanged.connect(self._update_hidden_plot)
-            self.plot.sigActiveImageChanged.connect(self._statsWidget.updateTimeseriesAsync)
+        self._statsWidget = roiStatsWindow(parent=self, plot=self.plot, stackview=self.view, roimanager=self._regionManagerWidget.roiManager)
+        
+        #self.view.sigFrameChanged.connect(self._update_hidden_plot)
+        self.view.sigFrameChanged.connect(self._statsWidget.updateTimeseriesAsync)
         
 
         # create Dock widgets
@@ -134,59 +131,17 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self._roisTabWidget.addTab(self._regionManagerWidget, "2D roi(s)")
         #self._roisTabWidget.addTab(self._curveRoiWidget, "1D roi(s)")
 
-    def _rebuild_roi_manager(self):
-        """Rebuild the ROI manager and reattach to the plot."""
-        """self._regionManagerWidget = roiManagerWidget(parent=self, plot=self.plot)
-        # Connect ROI signal to register ROI automatically
-        self._regionManagerWidget.roiManager.sigRoiAdded.connect(self._statsWidget.registerRoi)
-        self._regionManagerWidget.roiManager.sigRoiAboutToBeRemoved.connect(self._statsWidget.unregisterRoi)
-        if self._regionManagerWidget is not None:
-            # Disconnect existing signals
-            self._regionManagerWidget.roiManager.start 
-            self._regionManagerWidget.roiManager.sigRoiAdded.disconnect(self._statsWidget.registerRoi)
-            self._regionManagerWidget.roiManager.sigRoiAboutToBeRemoved.disconnect(self._statsWidget.unregisterRoi)
-            # Remove existing ROI manager widget from tab
-            index = self._roisTabWidget.indexOf(self._regionManagerWidget)
-            if index != -1:
-                self._roisTabWidget.removeTab(index)
-            self._regionManagerWidget.deleteLater()
-            self._regionManagerWidget = None
-
-        """
-        self._regionManagerWidget = None
-        if isinstance(self.plot, StackView):
-            self._regionManagerWidget = roiManagerWidget(parent=self, plot=self.view)
-        elif isinstance(self.plot, Plot2D):
-            self._regionManagerWidget = roiManagerWidget(parent=self, plot=self.view)
-
-        # Reconnect signals
-        self._regionManagerWidget.roiManager.sigRoiAdded.connect(self._statsWidget.registerRoi)
-        self._regionManagerWidget.roiManager.sigRoiAboutToBeRemoved.connect(self._statsWidget.unregisterRoi)
-
-        # Add new ROI manager widget to tab
-        self._roisTabWidget.clear()
-        self._roisTabWidget.addTab(self._regionManagerWidget, "2D roi(s)")
-
-    def _init_Plot2D(self):
-        self.plot = Plot2D(parent=self, backend="gl")
-        self.view = self.plot
-        self.setCentralWidget(self.plot)
-        self.plot.setKeepDataAspectRatio(True)
-        self.plot.setYAxisInverted(True)
-        self.plot.setDefaultColormap(Colormap("green"))
-        qt.QTimer.singleShot(0, self._rebuild_roi_manager)
-
     def _init_StackView(self):
-        self.plot = StackView(parent=self, backend="gl")
-        self.view = self.plot.getPlotWidget()
-        self.setCentralWidget(self.plot)
-        self.plot.setKeepDataAspectRatio(True)
-        self.plot.setYAxisInverted(True)
-        self.plot._StackView__planeSelection.setVisible(False)
-        self.plot._StackView__planeSelection.setEnabled(False)
-        self.plot.setColormap("green")
+        self.view = StackView(parent=self, backend="gl")
+        self.plot = self.view.getPlotWidget()
+        self.setCentralWidget(self.view)
+        self.view.setKeepDataAspectRatio(True)
+        self.view.setYAxisInverted(True)
+        self.view._StackView__planeSelection.setVisible(False)
+        self.view._StackView__planeSelection.setEnabled(False)
+        self.view.setColormap("green")
         # change the plane widget label to a slider label for consistency
-        self.plot._browser_label.setText("Slider (Frames):")
+        self.view._browser_label.setText("Slider (Frames):")
         qt.QTimer.singleShot(0, self._rebuild_roi_manager)
 
     def _open_file(self, file_type):
@@ -206,8 +161,8 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self._init_StackView()
             print(f"Loaded dataset with shape {image_dataset.shape} from {file_path}")
             print(image_dataset)
-            self.plot.setStack(image_dataset)
-            self.plot.setFrameNumber(0)
+            self.view.setStack(image_dataset)
+            self.view.setFrameNumber(0)
         except Exception as e:
             qt.QMessageBox.warning(self, "Failed to load the media", f"Failed to load HDF5 dataset or convert video file to HDF5: {e}")
             self._init_Plot2D()
@@ -231,8 +186,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         try:
             if self.camera is not None:
                 # Clear the StackView reference to the old dataset BEFORE cleanup
-                if isinstance(self.plot, StackView):
-                    self.plot.setStack(None)
+                self.view.setStack(None)
                 self.camera.cleanup()
                 self.camera = None
             print(f"Initializing camera on port {port} with backend {backend} and name {name}")
@@ -255,10 +209,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self.syncButton.clicked.connect(self._sync_camera)
             self.syncButton.toggled.connect(self._sync_camera)
             # add the sync button to the slider browser layout
-            if isinstance(self.plot, StackView):
-                self.plot._browser.mainLayout.addWidget(self.syncButton)
-                self.plot._browser.setFrameRate(int(self.camera.getFPS()))
-                self.plot._browser.setContentsMargins(0, 0, 15, 0)
+            self.view._browser.mainLayout.addWidget(self.syncButton)
+            self.view._browser.setFrameRate(int(self.camera.getFPS()))
+            self.view._browser.setContentsMargins(0, 0, 15, 0)
 
             # populate the stackview with the live single-frame buffer
             if self.camera.latest_frame is not None:
@@ -267,13 +220,12 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
                 frame = self.camera.latest_frame[0] if self.camera.latest_frame.ndim == 3 else self.camera.latest_frame
                 self.current_frame = frame
                 self.plot.addImage(frame)
-                self._hiddenPlot2D.addImage(frame)
-                if isinstance(self.plot, StackView):
-                    self.plot.setStack(self.camera.latest_frame)
-                    self.plot.setFrameNumber(0)
+                #self._hiddenPlot2D.addImage(frame)
+                self.view.setStack(self.camera.latest_frame)
+                self.view.setFrameNumber(0)
 
             # connect the resize callback to the camera
-            self.camera.on_resize = lambda new_dataset: self.dataResized.emit(self.plot, new_dataset)
+            #self.camera.on_resize = lambda new_dataset: self.dataResized.emit(self.plot, new_dataset)
 
             # connect the resize signal to the plot
             self.dataResized.connect(self.update_dataset)
@@ -307,8 +259,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self.camera_dshow_settings_action.setEnabled(is_connected)
 
     def _sync_camera(self):
-        if self.camera is not None and isinstance(self.plot, StackView):
-            self.plot.setFrameNumber(self.camera.getCurrentFrame())
+        self.view.setFrameNumber(self.camera.getCurrentFrame())
 
     def _camera_loop(self):
         if self.camera is not None and self.camera.cap.isOpened():
@@ -319,11 +270,8 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
                 # Remove first dimension if present (1, H, W) -> (H, W)
                 frame = self.camera.latest_frame[0] if self.camera.latest_frame.ndim == 3 else self.camera.latest_frame
                 self.current_frame = frame
-                if isinstance(self.plot, StackView):
-                    self.plot.setStack(self.camera.latest_frame)
-                else:
-                    self.plot.addImage(frame)
-                    self._hiddenPlot2D.addImage(frame)
+                self.plot.addImage(frame)
+                #self._hiddenPlot2D.addImage(frame)
             # Sync stackview frame number with camera frame number
             if self.syncButton is not None and self.syncButton.isChecked():
                 self._sync_camera()
@@ -332,7 +280,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         aw = AboutWindow(self)
         aw.show()
 
-    def _update_hidden_plot(self, index):
+    """def _update_hidden_plot(self, index):
         try:
             if isinstance(self.plot, StackView):
                 frame = self.plot._stack[self.plot.getFrameNumber()]
@@ -345,7 +293,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             # For Plot2D, hidden plot is already updated in camera loop
             self._statsWidget.statsWidget._updateAllStats()
         except Exception as e:
-            print(f"Failed to update hidden plot: {e}")
+            print(f"Failed to update hidden plot: {e}")"""
 
     def update_dataset(self, plot, dataset):
         """Update the plot with the new dataset"""

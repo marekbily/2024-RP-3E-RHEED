@@ -22,17 +22,6 @@ class CameraInit:
             self.on_resize: Callable[[Any], None] | None = None
             self.h5_file = None  # HDF5 file handle
             self.is_recording = False  # Recording state
-
-            # Check for a config file and load the camera port
-            """if os.path.exists("camera_config.txt"):
-                with open("camera_config.txt", "r") as f:
-                    #self.camera_port = int(f.readline())
-                    f.close()
-            else:
-                qt.QMessageBox.warning(None, "Camera Config Error", "Failed to load camera configuration. "+
-                                        "Check if the camera_config.txt file exists. Always use Camera Setup and Launch menu to "+
-                                        "configure the camera settings and launch the camera.")
-            """
             
             # Callback for resizing the dataset
             self.cache_folder = "cacheimg"
@@ -50,39 +39,6 @@ class CameraInit:
                                     " menu for more information.")
                 return
 
-            # Check for a config file
-            """if os.path.exists("camera_config.txt"):
-                with open("camera_config.txt", "r") as f:
-                    self.camera_port = int(f.readline())
-                    self.cap.set(cv2.CAP_PROP_SETTINGS, 1)
-                    self.cap.set(cv2.CAP_PROP_FPS, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_EXPOSURE, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_GAIN, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_BRIGHTNESS, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_CONTRAST, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_SATURATION, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_HUE, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_SHARPNESS, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_GAMMA, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_WHITE_BALANCE_BLUE_U, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_BACKLIGHT, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_ZOOM, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_FOCUS, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_AUTOFOCUS, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_WB_TEMPERATURE, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_FOURCC, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_AUTO_WB, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_TEMPERATURE, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_TRIGGER, int(f.readline()))
-                    self.cap.set(cv2.CAP_PROP_TRIGGER_DELAY, int(f.readline()))
-                    f.close()
-            else:
-                qt.QMessageBox.warning(None, "Camera Config Error", "Failed to load camera configuration. "+
-                                        "Check if the camera_config.txt file exists. Always use Camera Setup and Launch menu to "+
-                                        "configure the camera settings and launch the camera.")
-            """
-            
             # Initialize single-frame buffer for live display (no HDF5 yet)
             gray_frame = self._capture_frame_raw()
             if gray_frame is None:
