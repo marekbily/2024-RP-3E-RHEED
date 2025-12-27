@@ -137,7 +137,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
     def _init_StackView(self):
         self.view = StackView(parent=self, backend="gl")
         self.plot = self.view.getPlotWidget()
-        self.setCentralWidget(self.plot)
+        self.setCentralWidget(self.view)
         self.view.setKeepDataAspectRatio(True)
         self.view.setYAxisInverted(True)
         self.view._StackView__planeSelection.setVisible(False)
@@ -145,6 +145,8 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self.view.setColormap("green")
         # change the plane widget label to a slider label for consistency
         self.view._browser_label.setText("Slider (Frames):")
+        # Hide browser controls initially (until dataset is loaded or recording starts)
+        self.view._browser.setVisible(False)
 
     def _open_file(self, file_type):
         file_path = file_dialog.open_file_path(file_type)
@@ -164,6 +166,8 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             print(image_dataset)
             self.view.setStack(image_dataset)
             self.view.setFrameNumber(0)
+            # Show browser controls when dataset is loaded
+            self.view._browser.setVisible(True)
         except Exception as e:
             qt.QMessageBox.warning(self, "Failed to load the media", f"Failed to load HDF5 dataset or convert video file to HDF5: {e}")
         
