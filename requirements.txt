@@ -4,11 +4,14 @@ fabio==2025.10.0
 fonttools==4.60.2
 h5py==3.15.1
 hdf5plugin==5.1.0
+imageio
+imageio-ffmpeg
 kiwisolver==1.4.9
 lxml==6.0.2
 matplotlib==3.10.7
 numpy>=2.0,<2.3.0
 opencv-python==4.12.0.88
+cv2-enumerate-cameras
 packaging==25.0
 pillow==12.0.0
 PyOpenGL==3.1.9
