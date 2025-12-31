@@ -30,12 +30,12 @@ class CameraInit:
             # Open the camera
             self.cap = cv2.VideoCapture(self.camera_port, self.camera_backend)
             self.cap.set(cv2.CAP_PROP_FPS, self.fps)
+            # Reduce internal buffer to minimize frame delay
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             print(f"Camera FPS: {self.cap.get(cv2.CAP_PROP_FPS)} CV2 FPS set to {self.fps}")
             if not self.cap.isOpened():
                 qt.QMessageBox.warning(None, "Camera Error", "Failed to open camera. Check if it is connected."+
-                                    " It may be caused by a wrong port configuration. For integrated camera "+
-                                    "use 0, for virtual camera or external camera use 1 or higher. -1 is reserved for "+
-                                    "automatic assignment but works only on certain OS. Check the Camera connection"+
+            "Check the Camera connection"+
                                     " menu for more information.")
                 return
 
@@ -87,7 +87,13 @@ class CameraInit:
 
     def _capture_frame_raw(self):
         """ Capture a raw frame from the camera and return it as a numpy array. """
-        ret, frame = self.cap.read()
+        # Flush all buffered frames by grabbing until we get the latest one
+        for _ in range(10):  # Flush up to 10 buffered frames
+            grabbed = self.cap.grab()
+            if not grabbed:
+                break
+        
+        ret, frame = self.cap.retrieve()
         if not ret:
             print("Failed to capture frame from camera.")
             return None
@@ -160,55 +166,3 @@ class CameraInit:
         """ Opens the DirectShow settings dialog for the camera (Windows only). """
         if os.name == 'nt':  # Check if the OS is Windows
             self.cap.set(cv2.CAP_PROP_SETTINGS, 1)
-
-    def startRecording(self, output_file: str, duration: int, filetype: str = "AVI"):
-        """ Starts recording video to the specified output file for the given duration in seconds. """
-        if filetype == "HDF5":
-            self._record_to_hdf5(output_file, duration)
-        else:
-            self._record_to_video(output_file, duration)
-            
-    def _record_to_video(self, output_file: str, duration: int):
-        """ Records video to an AVI file for the given duration in seconds. """
-        fps = self.getFPS()
-        fourcc = -1
-        ret, frame = self.cap.read()
-        if not ret:
-            print("Failed to capture frame for AVI recording.")
-            return
-        height, width, _ = frame.shape
-
-        out = cv2.VideoWriter(output_file, fourcc, fps, (width, height), isColor=False)
-
-        total_frames = int(fps * duration)
-        for _ in range(total_frames):
-            ret, frame = self.cap.read()
-            if not ret:
-                print("Failed to capture frame during AVI recording.")
-                break
-            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            out.write(gray_frame)
-
-        out.release()
-
-    def _record_to_hdf5(self, output_file: str, duration: int):
-        """ Records video to an HDF5 file for the given duration in seconds. """
-        fps = self.getFPS()
-        total_frames = int(fps * duration)
-        ret, frame = self.cap.read()
-        if not ret:
-            print("Failed to capture frame for HDF5 recording.")
-            return
-        height, width, _ = frame.shape
-
-        with h5py.File(output_file, 'w') as h5f:
-            dset = h5f.create_dataset('video', (total_frames, height, width), dtype='uint8')
-
-            for i in range(total_frames):
-                ret, frame = self.cap.read()
-                if not ret:
-                    print("Failed to capture frame during HDF5 recording.")
-                    break
-                gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                dset[i, :, :] = gray_frame
-    

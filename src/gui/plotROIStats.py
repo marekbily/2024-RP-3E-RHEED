@@ -147,6 +147,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self.view._browser_label.setText("Slider (Frames):")
         # Hide browser controls initially (until dataset is loaded or recording starts)
         self.view._browser.setVisible(False)
+        self.view._browser_label.setVisible(False)
 
     def _open_file(self, file_type):
         file_path = file_dialog.open_file_path(file_type)
@@ -168,6 +169,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self.view.setFrameNumber(0)
             # Show browser controls when dataset is loaded
             self.view._browser.setVisible(True)
+            self.view._browser_label.setVisible(True)
         except Exception as e:
             qt.QMessageBox.warning(self, "Failed to load the media", f"Failed to load HDF5 dataset or convert video file to HDF5: {e}")
         
@@ -314,12 +316,11 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self.camera.capture_frame()
             # Update live display from the single-frame buffer: rebind to trigger UI refresh
             if self.camera.latest_frame is not None:
-                print("Updating live camera frame in plot")
                 # Remove first dimension if present (1, H, W) -> (H, W)
                 frame = self.camera.latest_frame[0] if self.camera.latest_frame.ndim == 3 else self.camera.latest_frame
                 self.current_frame = frame
-                self.plot.addImage(self.current_frame)
-                #self._hiddenPlot2D.addImage(frame)
+                # Use replace=True to update the image in place without recreating the plot item
+                self.plot.addImage(self.current_frame, replace=True, resetzoom=False)
             # Sync stackview frame number with camera frame number
             if self.syncButton is not None and self.syncButton.isChecked():
                 self._sync_camera()

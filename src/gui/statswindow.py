@@ -9,8 +9,7 @@ class roiStatsWindow(qt.QWidget):
     """Window that embeds the stats widget and button for launching time series of the ROIs."""
 
     STATS = [
-    ("mean", numpy.mean),
-    ("value", float)
+    ("mean", numpy.mean)
     ]
 
     def __init__(self, parent=None, plot=None, stackview=None, roimanager=None):
@@ -76,7 +75,6 @@ class roiStatsWindow(qt.QWidget):
                 return
             rois = self._roiManager.getRois()
             for roi in rois:
-                self.statsWidget.registerROI(roi)
                 self.statsWidget.addItem(plotItem=self._plot2d.getImage(), roi=roi)
         except Exception:
             qt.QMessageBox.warning(self, "No Plot2D","It is not possible to add ROIs until there is a "+
