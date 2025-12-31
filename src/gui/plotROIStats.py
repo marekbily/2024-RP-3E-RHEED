@@ -71,7 +71,15 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self.camera_settings_action = qt.QAction("Camera Settings", self)
         self.camera_settings_action.triggered.connect(self._camera_settings_menu)
 
-        self.camera_recording_action = qt.QAction("Recording", self)
+        # Create Recording submenu with Start/Stop options
+        self.camera_recording_menu = qt.QMenu("Recording", self)
+        self.start_recording_action = qt.QAction("Start Recording", self)
+        self.start_recording_action.triggered.connect(self._start_recording)
+        self.stop_recording_action = qt.QAction("Stop Recording", self)
+        self.stop_recording_action.triggered.connect(self._stop_recording)
+        self.stop_recording_action.setEnabled(False)  # Disabled until recording starts
+        self.camera_recording_menu.addAction(self.start_recording_action)
+        self.camera_recording_menu.addAction(self.stop_recording_action)
 
         if camera_menu is not None:
             camera_menu.addAction(self.connect_camera_action)
@@ -79,7 +87,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             if self.camera_dshow_settings_action is not None:
                 camera_menu.addAction(self.camera_dshow_settings_action)
             camera_menu.addAction(self.camera_settings_action)
-            camera_menu.addAction(self.camera_recording_action)
+            camera_menu.addMenu(self.camera_recording_menu)
             camera_menu.aboutToShow.connect(self._update_camera_menu_state)
         
         # add about window
@@ -183,6 +191,13 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self.cmw = CameraSettingsWindow(camera_init=self.camera)
             self.cmw.show()
 
+    def _set_browse_controls_visible(self, visible):
+        """Show or hide the frame browser controls (slider, label, sync button)."""
+        self.view._browser.setVisible(visible)
+        self.view._browser_label.setVisible(visible)
+        if self.syncButton is not None:
+            self.syncButton.setVisible(visible)
+
     def _stop_camera(self):
         """Stop capture loop, timer, and release camera resources."""
         # Stop timer
@@ -196,6 +211,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             except Exception:
                 pass
             self.timer = None
+
+        # Hide browser controls
+        self._set_browse_controls_visible(False)
 
         # Remove sync button
         if self.syncButton is not None:
@@ -297,28 +315,106 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
     def _update_camera_menu_state(self):
         """Update camera menu actions based on camera connection state."""
         is_connected = self.camera is not None and self.camera.cap is not None and self.camera.cap.isOpened()
+        is_recording = is_connected and self.camera.is_recording
+        
         self.disconnect_camera_action.setEnabled(is_connected)
         self.camera_settings_action.setEnabled(is_connected)
-        self.camera_recording_action.setEnabled(is_connected)
+        self.camera_recording_menu.setEnabled(is_connected)
+        self.start_recording_action.setEnabled(is_connected and not is_recording)
+        self.stop_recording_action.setEnabled(is_connected and is_recording)
         if self.camera_dshow_settings_action is not None:
             self.camera_dshow_settings_action.setEnabled(is_connected)
 
     def _sync_camera(self):
         self.view.setFrameNumber(self.camera.getCurrentFrame())
 
+    def _start_recording(self):
+        """Start recording: show file dialog, then begin HDF5 capture and bind dataset to StackView."""
+        if self.camera is None:
+            return
+        
+        # Get default path from camera
+        default_path = self.camera.get_default_recording_path()
+        default_dir = os.path.dirname(default_path)
+        default_name = os.path.basename(default_path)
+        
+        # Show save file dialog
+        file_path, _ = qt.QFileDialog.getSaveFileName(
+            self,
+            "Save Recording As",
+            os.path.join(default_dir, default_name),
+            "HDF5 Files (*.h5);;All Files (*)"
+        )
+        
+        if not file_path:
+            return  # User cancelled
+        
+        # Ensure .h5 extension
+        if not file_path.endswith('.h5'):
+            file_path += '.h5'
+        
+        # Start recording
+        self.camera.start_recording(file_path)
+        
+        # Bind the HDF5 dataset to the StackView for live browsing during recording
+        if self.camera.image_dataset is not None:
+            self.view.setStack(self.camera.image_dataset)
+            # Show browser controls for navigating recorded frames
+            self._set_browse_controls_visible(True)
+            # Check sync by default so user sees live recording
+            if self.syncButton is not None:
+                self.syncButton.setChecked(True)
+        
+        # Update menu state
+        self.start_recording_action.setEnabled(False)
+        self.stop_recording_action.setEnabled(True)
+
+    def _stop_recording(self):
+        """Stop recording and switch back to live preview mode."""
+        if self.camera is None:
+            return
+        
+        # Clear StackView before stopping to prevent access to closed dataset
+        self.view.setStack(None)
+        
+        file_path = self.camera.stop_recording()
+        
+        # Hide browser controls - back to live preview mode
+        self._set_browse_controls_visible(False)
+        
+        if file_path and os.path.exists(file_path):
+            qt.QMessageBox.information(self, "Recording Complete",
+                f"Recording saved to:\n{file_path}")
+        
+        # Update menu state
+        self.start_recording_action.setEnabled(True)
+        self.stop_recording_action.setEnabled(False)
+
     def _camera_loop(self):
         if self.camera is not None and self.camera.cap.isOpened():
             self.camera.capture_frame()
-            # Update live display from the single-frame buffer: rebind to trigger UI refresh
-            if self.camera.latest_frame is not None:
-                # Remove first dimension if present (1, H, W) -> (H, W)
-                frame = self.camera.latest_frame[0] if self.camera.latest_frame.ndim == 3 else self.camera.latest_frame
-                self.current_frame = frame
-                # Use replace=True to update the image in place without recreating the plot item
-                self.plot.addImage(self.current_frame, replace=True, resetzoom=False)
-            # Sync stackview frame number with camera frame number
-            if self.syncButton is not None and self.syncButton.isChecked():
-                self._sync_camera()
+            
+            if self.camera.is_recording and self.camera.image_dataset is not None:
+                # Recording mode: update StackView with the HDF5 dataset
+                # Only rebind if dataset was resized
+                current_stack = self.view.getStack(copy=False, returnNumpyArray=False)
+                if current_stack is None or current_stack[0] is not self.camera.image_dataset:
+                    self.view.setStack(self.camera.image_dataset)
+                
+                # Update browser range to show new frames
+                frame_count = self.camera.frame_index
+                if frame_count > 0:
+                    self.view._browser.setRange(0, frame_count - 1)
+                
+                # Auto-sync to latest frame if sync button is checked
+                if self.syncButton is not None and self.syncButton.isChecked():
+                    self.view.setFrameNumber(max(0, frame_count - 1))
+            else:
+                # Live preview mode: update the plot with latest frame
+                if self.camera.latest_frame is not None:
+                    frame = self.camera.latest_frame[0] if self.camera.latest_frame.ndim == 3 else self.camera.latest_frame
+                    self.current_frame = frame
+                    self.plot.addImage(self.current_frame, replace=True, resetzoom=False)
             
     def _about_menu(self):
         aw = AboutWindow(self)

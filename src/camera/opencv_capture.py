@@ -102,8 +102,12 @@ class CameraInit:
         nfr = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         return nfr
 
-    def start_recording(self):
-        """ Initialize HDF5 recording. Must be called before capturing frames to record. """
+    def start_recording(self, file_path=None):
+        """ Initialize HDF5 recording. Must be called before capturing frames to record.
+        
+        Args:
+            file_path: Optional custom file path for the HDF5 file. If None, uses default naming.
+        """
         if self.is_recording:
             return  # Already recording
         
@@ -112,9 +116,12 @@ class CameraInit:
             return
         
         height, width = self.frame_shape
-        self.h5_file = h5py.File(
-            os.path.join(self.cache_folder, f"dataset_{datetime.datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}.h5"), "w"
-        )
+        
+        # Use provided path or generate default
+        if file_path is None:
+            file_path = os.path.join(self.cache_folder, f"dataset_{datetime.datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}.h5")
+        
+        self.h5_file = h5py.File(file_path, "w")
         self.image_dataset = self.h5_file.create_dataset(
             "arrays",
             shape=(self.dataset_size, height, width),
@@ -124,20 +131,31 @@ class CameraInit:
         )
         self.is_recording = True
         self.frame_index = 0
+        self.recording_file_path = file_path
         print(f"Started HDF5 recording to {self.h5_file.filename}")
 
     def stop_recording(self):
-        """ Stop HDF5 recording and close the file. """
+        """ Stop HDF5 recording and close the file. Returns the file path of the recording. """
         if not self.is_recording:
-            return
+            return None
         
         self.is_recording = False
+        file_path = getattr(self, 'recording_file_path', None)
         if self.h5_file is not None:
+            # Trim dataset to actual recorded frames
+            if self.image_dataset is not None and self.frame_index < self.dataset_size:
+                self.image_dataset.resize(self.frame_index, axis=0)
             self.h5_file.close()
             self.h5_file = None
         self.image_dataset = None
+        recorded_frames = self.frame_index
         self.frame_index = 0
-        print("Stopped HDF5 recording")
+        print(f"Stopped HDF5 recording. Recorded {recorded_frames} frames to {file_path}")
+        return file_path
+    
+    def get_default_recording_path(self):
+        """ Returns the default file path for a new recording. """
+        return os.path.join(self.cache_folder, f"dataset_{datetime.datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}.h5")
 
     def cleanup(self):
         self.cap.release()
