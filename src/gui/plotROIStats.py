@@ -58,34 +58,29 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         # add camera setup and launch dropdown
         camera_menu = self.menu.addMenu("Camera")
 
-        connect_camera_action = qt.QAction("Connect camera", self)
-        connect_camera_action.triggered.connect(self._camera_connect_menu)
+        self.connect_camera_action = qt.QAction("Connect camera", self)
+        self.connect_camera_action.triggered.connect(self._camera_connect_menu)
 
-        disconnect_camera_action = qt.QAction("Disconnect camera", self)
-        disconnect_camera_action.triggered.connect(self._stop_camera)
+        self.disconnect_camera_action = qt.QAction("Disconnect camera", self)
+        self.disconnect_camera_action.triggered.connect(self._stop_camera)
 
         if os.name == "nt":
-            camera_dshow_settings_action = qt.QAction("DirectShow Settings", self)
-            camera_dshow_settings_action.triggered.connect(self._camera_dshow_settings_menu)
+            self.camera_dshow_settings_action = qt.QAction("DirectShow Settings", self)
+            self.camera_dshow_settings_action.triggered.connect(self._camera_dshow_settings_menu)
         
-        camera_settings_action = qt.QAction("Camera Settings", self)
-        camera_settings_action.triggered.connect(self._camera_settings_menu)
+        self.camera_settings_action = qt.QAction("Camera Settings", self)
+        self.camera_settings_action.triggered.connect(self._camera_settings_menu)
 
-        camera_recording_action = qt.QAction("Recording", self)
+        self.camera_recording_action = qt.QAction("Recording", self)
 
         if camera_menu is not None:
-            camera_menu.addAction(connect_camera_action)
-            camera_menu.addAction(disconnect_camera_action)
-            if camera_dshow_settings_action is not None:
-                camera_menu.addAction(camera_dshow_settings_action)
-            camera_menu.addAction(camera_settings_action)
-            camera_menu.addAction(camera_recording_action)
+            camera_menu.addAction(self.connect_camera_action)
+            camera_menu.addAction(self.disconnect_camera_action)
+            if self.camera_dshow_settings_action is not None:
+                camera_menu.addAction(self.camera_dshow_settings_action)
+            camera_menu.addAction(self.camera_settings_action)
+            camera_menu.addAction(self.camera_recording_action)
             camera_menu.aboutToShow.connect(self._update_camera_menu_state)
-        
-        # Store menu actions for later enable/disable
-        self.camera_settings_action = camera_settings_action
-        self.camera_recording_action = camera_recording_action
-        self.camera_dshow_settings_action = camera_dshow_settings_action if os.name == "nt" else None
         
         # add about window
         about_action = qt.QAction("About", self)
@@ -299,10 +294,10 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             print(f"Failed to initialize camera: {e}")
             self.camera = None
 
-
     def _update_camera_menu_state(self):
         """Update camera menu actions based on camera connection state."""
         is_connected = self.camera is not None and self.camera.cap is not None and self.camera.cap.isOpened()
+        self.disconnect_camera_action.setEnabled(is_connected)
         self.camera_settings_action.setEnabled(is_connected)
         self.camera_recording_action.setEnabled(is_connected)
         if self.camera_dshow_settings_action is not None:
