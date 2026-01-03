@@ -49,7 +49,7 @@ class roiManagerWidget(qt.QWidget):
 
         # Create a toolbar containing buttons for all ROI 'drawing' modes
         self._roiToolbar = qt.QToolBar()
-        self._roiToolbar.setIconSize(qt.QSize(16, 16))
+        #self._roiToolbar.setIconSize(qt.QSize(32, 32))
 
         for roiClass in self.roiManager.getSupportedRoiClasses():
         # Create a tool button and associate it with the QAction of each mode

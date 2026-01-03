@@ -159,6 +159,11 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
 
         try:
             playback = H5Playback(file_path, file_type)
+            
+            # Check if user cancelled conversion
+            if playback.cancelled:
+                return
+            
             image_dataset = getattr(playback, "image_dataset", None)
             dataset_size = getattr(playback, "dataset_size", 0)
 
