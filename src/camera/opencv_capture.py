@@ -15,7 +15,7 @@ class CameraInit:
             self.fps = float(fps)
             self.dataset_size = initial_size
             self.image_dataset = None  # HDF5 dataset (only created when recording)
-            self.latest_frame = None  # Single-frame buffer for live display (shape: 1 x H x W)
+            self.latest_frame = None  # Single-frame buffer for live display
             self.camera_port = port
             self.camera_backend = backend
             self.camera_name = name
@@ -63,7 +63,7 @@ class CameraInit:
         if self.is_recording and self.image_dataset is not None:
             # Store in HDF5 dataset
             if self.frame_index >= self.dataset_size:
-                new_size = int(self.dataset_size + 1000)
+                new_size = int(self.dataset_size + 500)
                 print(f"Resizing dataset from {self.dataset_size} to {new_size} frames...")
                 self.image_dataset.resize(new_size, axis=0)
                 self.dataset_size = new_size
@@ -77,13 +77,6 @@ class CameraInit:
             print(nfr)
             if self.latest_frame is not None:
                 self.latest_frame[0] = nfr
-
-        # Display - not needed because it is replaced with direct connection to silx plot
-        #display_img = (nfr / 255.0).astype(np.float32)
-        #cv2.imshow("Grayscale Image", display_img)
-        
-        #if cv2.waitKey(1) & 0xFF == ord('q'):
-        #    self.cleanup()
 
     def _capture_frame_raw(self):
         """ Capture a raw frame from the camera and return it as a numpy array. """
@@ -128,6 +121,7 @@ class CameraInit:
             maxshape=(None, height, width),
             dtype=numpy.float32,
             chunks=(10, height, width),
+            compression='gzip',
         )
         self.is_recording = True
         self.frame_index = 0

@@ -49,11 +49,16 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         file_menu = self.menu.addMenu("File")
         video_upload_action = qt.QAction("Video upload", self)
         dataset_upload_action = qt.QAction("H5 Dataset upload", self)
+        self.clear_dataset_action = qt.QAction("Clear Dataset", self)
+        self.clear_dataset_action.setEnabled(False)  # Disabled until dataset is loaded
         video_upload_action.triggered.connect(lambda : self._open_file("vid"))
         dataset_upload_action.triggered.connect(lambda : self._open_file("h5"))
+        self.clear_dataset_action.triggered.connect(self._clear_dataset)
         if file_menu is not None:
             file_menu.addAction(video_upload_action)
             file_menu.addAction(dataset_upload_action)
+            file_menu.addSeparator()
+            file_menu.addAction(self.clear_dataset_action)
 
         # add camera setup and launch dropdown
         camera_menu = self.menu.addMenu("Camera")
@@ -70,6 +75,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         
         self.camera_settings_action = qt.QAction("Camera Settings", self)
         self.camera_settings_action.triggered.connect(self._camera_settings_menu)
+        self.camera_settings_action.setEnabled(False)  # Permanently disabled for now
 
         # Create Recording submenu with Start/Stop options
         self.camera_recording_menu = qt.QMenu("Recording", self)
@@ -84,9 +90,11 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         if camera_menu is not None:
             camera_menu.addAction(self.connect_camera_action)
             camera_menu.addAction(self.disconnect_camera_action)
+            camera_menu.addSeparator()
             if self.camera_dshow_settings_action is not None:
                 camera_menu.addAction(self.camera_dshow_settings_action)
             camera_menu.addAction(self.camera_settings_action)
+            camera_menu.addSeparator()
             camera_menu.addMenu(self.camera_recording_menu)
             camera_menu.aboutToShow.connect(self._update_camera_menu_state)
         
@@ -158,6 +166,13 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             return
 
         try:
+            # Close any previous playback file
+            if self.playback is not None:
+                try:
+                    self.playback.close()
+                except Exception:
+                    pass
+            
             playback = H5Playback(file_path, file_type)
             
             # Check if user cancelled conversion
@@ -171,6 +186,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
                 qt.QMessageBox.warning(self, "Failed to load the media", "No frames found in the selected file.")
                 return
 
+            # Store playback for cleanup
+            self.playback = playback
+            
             print(f"Loaded dataset with shape {image_dataset.shape} from {file_path}")
             print(image_dataset)
             self.view.setStack(image_dataset)
@@ -178,8 +196,29 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             # Show browser controls when dataset is loaded
             self.view._browser.setVisible(True)
             self.view._browser_label.setVisible(True)
+            # Enable clear dataset action
+            self.clear_dataset_action.setEnabled(True)
         except Exception as e:
             qt.QMessageBox.warning(self, "Failed to load the media", f"Failed to load HDF5 dataset or convert video file to HDF5: {e}")
+
+    def _clear_dataset(self):
+        """Clear the current dataset from the StackView and reset to clean state."""
+        # Close any open playback file
+        if self.playback is not None:
+            try:
+                self.playback.close()
+            except Exception:
+                pass
+            self.playback = None
+        
+        # Clear the StackView
+        self.view.setStack(None)
+        
+        # Hide browser controls
+        self._set_browse_controls_visible(False)
+        
+        # Disable clear action
+        self.clear_dataset_action.setEnabled(False)
         
     def _camera_connect_menu(self):
         self.cmw = CameraConnectWindow()
@@ -258,7 +297,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             # Stop any existing camera/session before reinitializing
             self._stop_camera()
             print(f"Initializing camera on port {port} with backend {backend} and name {name}")
-            self.camera = CameraInit(2000, port, backend, name, fps)
+            self.camera = CameraInit(500, port, backend, name, fps)
 
             if self.syncButton is not None:
                 self.syncButton.deleteLater()
@@ -323,7 +362,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         is_recording = is_connected and self.camera.is_recording
         
         self.disconnect_camera_action.setEnabled(is_connected)
-        self.camera_settings_action.setEnabled(is_connected)
+        # self.camera_settings_action is permanently disabled
         self.camera_recording_menu.setEnabled(is_connected)
         self.start_recording_action.setEnabled(is_connected and not is_recording)
         self.stop_recording_action.setEnabled(is_connected and is_recording)
@@ -360,15 +399,14 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         
         # Start recording
         self.camera.start_recording(file_path)
+        self._recording_last_frame_count = 0  # Track frame count for browser updates
+        self._recording_dataset_bound = False  # Track if we've bound the dataset
         
-        # Bind the HDF5 dataset to the StackView for live browsing during recording
-        if self.camera.image_dataset is not None:
-            self.view.setStack(self.camera.image_dataset)
-            # Show browser controls for navigating recorded frames
-            self._set_browse_controls_visible(True)
-            # Check sync by default so user sees live recording
-            if self.syncButton is not None:
-                self.syncButton.setChecked(True)
+        # Show browser controls for navigating recorded frames (but don't bind dataset yet - wait for first frame)
+        self._set_browse_controls_visible(True)
+        # Check sync by default so user sees live recording
+        if self.syncButton is not None:
+            self.syncButton.setChecked(True)
         
         # Update menu state
         self.start_recording_action.setEnabled(False)
@@ -381,6 +419,10 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         
         # Clear StackView before stopping to prevent access to closed dataset
         self.view.setStack(None)
+        
+        # Reset recording tracking state
+        self._recording_dataset_bound = False
+        self._recording_last_frame_count = 0
         
         file_path = self.camera.stop_recording()
         
@@ -401,19 +443,41 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             
             if self.camera.is_recording and self.camera.image_dataset is not None:
                 # Recording mode: update StackView with the HDF5 dataset
-                # Only rebind if dataset was resized
-                current_stack = self.view.getStack(copy=False, returnNumpyArray=False)
-                if current_stack is None or current_stack[0] is not self.camera.image_dataset:
-                    self.view.setStack(self.camera.image_dataset)
-                
-                # Update browser range to show new frames
                 frame_count = self.camera.frame_index
-                if frame_count > 0:
-                    self.view._browser.setRange(0, frame_count - 1)
                 
-                # Auto-sync to latest frame if sync button is checked
-                if self.syncButton is not None and self.syncButton.isChecked():
-                    self.view.setFrameNumber(max(0, frame_count - 1))
+                if frame_count > 0:
+                    # Bind dataset on first frame or after resize
+                    current_stack = self.view.getStack(copy=False, returnNumpyArray=False)
+                    needs_rebind = (not getattr(self, '_recording_dataset_bound', False) or 
+                                   current_stack is None or 
+                                   current_stack[0] is not self.camera.image_dataset)
+                    
+                    if needs_rebind:
+                        # Preserve current frame position when rebinding
+                        current_frame = self.view.getFrameNumber() if self._recording_dataset_bound else 0
+                        self.view.setStack(self.camera.image_dataset)
+                        self._recording_dataset_bound = True
+                        # Set initial range
+                        self.view._browser.setRange(0, frame_count - 1)
+                        # Restore frame position (clamped to valid range)
+                        restored_frame = min(current_frame, frame_count - 1)
+                        self.view.setFrameNumber(restored_frame)
+                    
+                    # Update browser range only when frame count changes
+                    last_count = getattr(self, '_recording_last_frame_count', 0)
+                    if frame_count != last_count:
+                        # Save current position before updating range
+                        current_pos = self.view.getFrameNumber()
+                        self.view._browser.setRange(0, frame_count - 1)
+                        # Restore position if not syncing
+                        if self.syncButton is None or not self.syncButton.isChecked():
+                            # Keep user's position, clamped to valid range
+                            self.view.setFrameNumber(min(current_pos, frame_count - 1))
+                        self._recording_last_frame_count = frame_count
+                    
+                    # Auto-sync to latest frame if sync button is checked
+                    if self.syncButton is not None and self.syncButton.isChecked():
+                        self.view.setFrameNumber(frame_count - 1)
             else:
                 # Live preview mode: update the plot with latest frame
                 if self.camera.latest_frame is not None:

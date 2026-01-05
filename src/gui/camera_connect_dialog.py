@@ -13,7 +13,7 @@ class CameraConnectWindow(qt.QMainWindow):
 
         # Force the window not to fullscreen
         self.setWindowTitle("Camera Selection and Launch")
-        self.resize(250, 200)
+        self.resize(400, 200)
 
         self.centralWidget = qt.QWidget(self)
         self.setCentralWidget(self.centralWidget)
