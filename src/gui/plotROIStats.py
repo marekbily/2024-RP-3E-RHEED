@@ -12,6 +12,7 @@ from gui.camera_connect_dialog import CameraConnectWindow
 from gui.camera_settings_dialog import CameraSettingsWindow
 import gui.file_dialog as file_dialog
 from gui.file_dialog import H5Playback
+import gui.roidictionary as roidict
 
 class _RoiStatsDisplayExWindow(qt.QMainWindow):
     """
@@ -40,6 +41,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         
         # store playback instance for cleanup
         self.playback = None
+        
+        # current H5 file path for ROI embedding
+        self.current_h5_path = None
 
         #create a menu bar
         self.menu = qt.QMenuBar(self)
@@ -166,12 +170,16 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             return
 
         try:
-            # Close any previous playback file
+            # Close any previous playback file first (so we can save ROIs)
             if self.playback is not None:
                 try:
                     self.playback.close()
                 except Exception:
                     pass
+                self.playback = None
+            
+            # Save ROIs to current dataset before switching (if embed enabled)
+            self._save_rois_before_switch()
             
             playback = H5Playback(file_path, file_type)
             
@@ -189,6 +197,12 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             # Store playback for cleanup
             self.playback = playback
             
+            # Get the actual H5 file path (may be different for video conversions)
+            if hasattr(playback, 'h5_file') and playback.h5_file is not None:
+                self.current_h5_path = playback.h5_file.filename
+            else:
+                self.current_h5_path = None
+            
             print(f"Loaded dataset with shape {image_dataset.shape} from {file_path}")
             print(image_dataset)
             self.view.setStack(image_dataset)
@@ -198,12 +212,24 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self.view._browser_label.setVisible(True)
             # Enable clear dataset action
             self.clear_dataset_action.setEnabled(True)
+            
+            # Handle ROI loading from H5
+            self._handle_roi_loading()
+            
         except Exception as e:
             qt.QMessageBox.warning(self, "Failed to load the media", f"Failed to load HDF5 dataset or convert video file to HDF5: {e}")
 
     def _clear_dataset(self):
         """Clear the current dataset from the StackView and reset to clean state."""
-        # Close any open playback file
+        # Capture ROI data BEFORE clearing stack (clearing removes ROIs)
+        h5_path_to_save = self.current_h5_path
+        captured_rois = list(self._regionManagerWidget.getRois())
+        captured_embed_enabled = self._regionManagerWidget.isEmbedChecked()
+        
+        # Clear the StackView (releases dataset reference, removes ROIs)
+        self.view.setStack(None)
+        
+        # Close any open playback file (must be closed before we can write ROIs)
         if self.playback is not None:
             try:
                 self.playback.close()
@@ -211,14 +237,19 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
                 pass
             self.playback = None
         
-        # Clear the StackView
-        self.view.setStack(None)
+        # Now save ROIs using captured data (file is closed and can be reopened in r+ mode)
+        if h5_path_to_save is not None:
+            self._save_rois_to_current_h5(rois=captured_rois, embed_enabled=captured_embed_enabled, h5_path=h5_path_to_save)
+        
+        # Clear current H5 path
+        self.current_h5_path = None
         
         # Hide browser controls
         self._set_browse_controls_visible(False)
         
-        # Disable clear action
+        # Disable clear action and embed checkbox
         self.clear_dataset_action.setEnabled(False)
+        self._regionManagerWidget.setEmbedEnabled(False)
         
     def _camera_connect_menu(self):
         self.cmw = CameraConnectWindow()
@@ -244,6 +275,10 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
 
     def _stop_camera(self):
         """Stop capture loop, timer, and release camera resources."""
+        # Save ROIs before stopping camera if recording was active
+        if self.camera is not None and self.camera.is_recording:
+            self._save_rois_to_current_h5()
+        
         # Stop timer
         if hasattr(self, "timer") and self.timer is not None:
             try:
@@ -291,6 +326,11 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             except Exception:
                 pass
             self.camera = None
+        
+        # Clear current H5 path and disable embed
+        self.current_h5_path = None
+        if hasattr(self, '_regionManagerWidget') and self._regionManagerWidget is not None:
+            self._regionManagerWidget.setEmbedEnabled(False)
 
     def _camera_init(self, port, backend, name, fps):
         try:
@@ -401,12 +441,16 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self.camera.start_recording(file_path)
         self._recording_last_frame_count = 0  # Track frame count for browser updates
         self._recording_dataset_bound = False  # Track if we've bound the dataset
+        self.current_h5_path = file_path  # Track for ROI embedding
         
         # Show browser controls for navigating recorded frames (but don't bind dataset yet - wait for first frame)
         self._set_browse_controls_visible(True)
         # Check sync by default so user sees live recording
         if self.syncButton is not None:
             self.syncButton.setChecked(True)
+        
+        # Enable ROI embedding (auto-checked for new recordings)
+        self._regionManagerWidget.setEmbedEnabled(True, checked=True)
         
         # Update menu state
         self.start_recording_action.setEnabled(False)
@@ -417,6 +461,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         if self.camera is None:
             return
         
+        # Save ROIs to recording before stopping (if embed enabled)
+        self._save_rois_to_current_h5()
+        
         # Clear StackView before stopping to prevent access to closed dataset
         self.view.setStack(None)
         
@@ -425,6 +472,10 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self._recording_last_frame_count = 0
         
         file_path = self.camera.stop_recording()
+        
+        # Clear current H5 path and disable embed
+        self.current_h5_path = None
+        self._regionManagerWidget.setEmbedEnabled(False)
         
         # Hide browser controls - back to live preview mode
         self._set_browse_controls_visible(False)
@@ -495,8 +546,139 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         plot.setStack(dataset)
         plot.setFrameNumber(framenum)
 
+    def _save_rois_to_current_h5(self, rois=None, embed_enabled=None, h5_path=None):
+        """Save ROIs to the current H5 file if embed is enabled.
+        
+        Args:
+            rois: Optional pre-captured list of ROIs (use if stack may be cleared before save)
+            embed_enabled: Optional pre-captured embed checkbox state
+            h5_path: Optional H5 path to save to (overrides current_h5_path)
+        """
+        # Use provided values or get current values
+        if embed_enabled is None:
+            embed_enabled = self._regionManagerWidget.isEmbedChecked()
+        if not embed_enabled:
+            return
+        
+        save_path = h5_path if h5_path is not None else self.current_h5_path
+        if save_path is None:
+            return
+        
+        # Check if file is writable
+        if not roidict.h5_is_writable(save_path):
+            qt.QMessageBox.warning(self, "Read-Only Dataset",
+                "This dataset is read-only. ROIs cannot be embedded.\n\n"
+                "Please save ROIs manually using the Save button in the ROI panel.")
+            return
+        
+        # Use provided ROIs or get current ROIs
+        if rois is None:
+            rois = self._regionManagerWidget.getRois()
+        print(f"DEBUG _save_rois_to_current_h5: Saving {len(rois)} ROIs to {save_path}")
+        
+        # Warn if saving empty ROI set
+        if len(rois) == 0:
+            reply = qt.QMessageBox.question(self, "Save Empty ROIs?",
+                "There are no ROIs to save. This will clear any previously saved ROIs in the dataset.\n\n"
+                "Do you want to continue?",
+                qt.QMessageBox.Yes | qt.QMessageBox.No,
+                qt.QMessageBox.No)
+            if reply != qt.QMessageBox.Yes:
+                return
+        
+        success = roidict.save_rois_to_h5(rois, save_path, embed_enabled=embed_enabled)
+        if success:
+            print(f"Saved {len(rois)} ROIs to {self.current_h5_path}")
+        else:
+            qt.QMessageBox.warning(self, "Save Failed",
+                "Failed to save ROIs to the dataset. Please save manually using the Save button.")
+
+    def _save_rois_before_switch(self):
+        """Prompt user to save ROIs before switching datasets."""
+        if not self._regionManagerWidget.isEmbedChecked():
+            return
+        
+        if self.current_h5_path is None:
+            return
+        
+        if not self._regionManagerWidget.hasRois():
+            return  # Nothing to save
+        
+        reply = qt.QMessageBox.question(self, "Save ROIs?",
+            "Do you want to save ROIs to the current dataset before switching?\n\n"
+            "Click 'No' to discard ROI changes.",
+            qt.QMessageBox.Yes | qt.QMessageBox.No,
+            qt.QMessageBox.Yes)
+        
+        if reply == qt.QMessageBox.Yes:
+            self._save_rois_to_current_h5()
+
+    def _handle_roi_loading(self):
+        """Handle loading ROIs when opening an H5 file."""
+        if self.current_h5_path is None:
+            # Enable embed for new video conversions
+            self._regionManagerWidget.setEmbedEnabled(True, checked=True)
+            return
+        
+        # Check if H5 has saved ROIs
+        if not roidict.h5_has_rois(self.current_h5_path):
+            # No ROIs in file, just enable embed
+            self._regionManagerWidget.setEmbedEnabled(True, checked=True)
+            return
+        
+        # Load ROIs from file
+        saved_rois, embed_enabled = roidict.load_rois_from_h5(self.current_h5_path, plot=self.plot)
+        
+        if saved_rois is None:
+            self._regionManagerWidget.setEmbedEnabled(True, checked=True)
+            return
+        
+        # Check if there are existing ROIs
+        if self._regionManagerWidget.hasRois():
+            # Show dialog to choose action
+            dialog = qt.QMessageBox(self)
+            dialog.setWindowTitle("ROIs Found in Dataset")
+            dialog.setText("This dataset contains saved ROIs, but you also have ROIs currently drawn.")
+            dialog.setInformativeText("What would you like to do?")
+            
+            load_btn = dialog.addButton("Load from dataset (discard current)", qt.QMessageBox.AcceptRole)
+            keep_btn = dialog.addButton("Keep current ROIs", qt.QMessageBox.RejectRole)
+            dialog.setDefaultButton(load_btn)
+            
+            dialog.exec()
+            
+            if dialog.clickedButton() == load_btn:
+                self._regionManagerWidget.loadROIsFromList(saved_rois)
+                print(f"Loaded {len(saved_rois)} ROIs from dataset")
+            else:
+                print("Kept current ROIs, discarding saved ROIs from dataset")
+        else:
+            # No current ROIs, just load from file
+            self._regionManagerWidget.loadROIsFromList(saved_rois)
+            print(f"Loaded {len(saved_rois)} ROIs from dataset")
+        
+        # Enable embed with saved state
+        self._regionManagerWidget.setEmbedEnabled(True, checked=embed_enabled)
+
     def closeEvent(self, event):
         """Ensure camera resources are released on window close."""
+        # Capture ROI data BEFORE any cleanup (cleanup clears ROIs)
+        h5_path_to_save = self.current_h5_path
+        captured_rois = list(self._regionManagerWidget.getRois())
+        captured_embed_enabled = self._regionManagerWidget.isEmbedChecked()
+        
+        # Close playback file first so we can save ROIs
+        if self.playback is not None:
+            try:
+                self.playback.close()
+            except Exception:
+                pass
+            self.playback = None
+        
+        # Save ROIs using captured data before cleanup clears them
+        if h5_path_to_save is not None:
+            self._save_rois_to_current_h5(rois=captured_rois, embed_enabled=captured_embed_enabled, h5_path=h5_path_to_save)
+        
         self._stop_camera()
         super().closeEvent(event)
 

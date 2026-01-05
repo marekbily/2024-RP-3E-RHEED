@@ -28,8 +28,14 @@ class roiManagerWidget(qt.QWidget):
 
         # Main layout for the custom widget
         layout = qt.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(10, 5, 5, 5)
         layout.setSpacing(5)
+        
+        # Create embed ROIs checkbox
+        self.embedCheckbox = qt.QCheckBox("Embed ROIs in the HDF5 dataset", self)
+        self.embedCheckbox.setEnabled(False)
+        self.embedCheckbox.setToolTip("Start recording or open a dataset to enable")
+        self.embedCheckbox.setChecked(False)
         
         # Create a horizontal layout for the save/load buttons
         btnLayout = qt.QHBoxLayout()
@@ -61,6 +67,7 @@ class roiManagerWidget(qt.QWidget):
         # Add the ROI table widget to the layout
         layout.addWidget(self._roiToolbar)
         layout.addWidget(self._roiTable)
+        layout.addWidget(self.embedCheckbox)
         layout.addLayout(btnLayout)
 
         #automatical color and name incrementation
@@ -87,6 +94,7 @@ class roiManagerWidget(qt.QWidget):
             self._save(filename)
 
     def _onRoiAdded(self, roi):
+        print(f"DEBUG _onRoiAdded: ROI added, now have {len(self.roiManager.getRois())} ROIs")
         roi.setName(f"ROI {len(self.roiManager.getRois())}")
         # set the colors of the ROIs from the list of colors above
         roi.setColor(self.colors[len(self.roiManager.getRois()) % len(self.colors)])
@@ -118,3 +126,30 @@ class roiManagerWidget(qt.QWidget):
     def clearROIs(self):
         for each in self.roiManager.getRois():
             self.roiManager.removeRoi(each)
+
+    def setEmbedEnabled(self, enabled, checked=True):
+        """Enable or disable the embed checkbox and optionally set its state."""
+        self.embedCheckbox.setEnabled(enabled)
+        if enabled:
+            self.embedCheckbox.setChecked(checked)
+            self.embedCheckbox.setToolTip("ROIs will be saved to the dataset when closed")
+        else:
+            self.embedCheckbox.setToolTip("Start recording or open a dataset to enable")
+
+    def isEmbedChecked(self):
+        """Return whether the embed checkbox is checked."""
+        return self.embedCheckbox.isChecked() and self.embedCheckbox.isEnabled()
+
+    def getRois(self):
+        """Return the list of current ROIs."""
+        return self.roiManager.getRois()
+
+    def hasRois(self):
+        """Return whether there are any ROIs."""
+        return len(self.roiManager.getRois()) > 0
+
+    def loadROIsFromList(self, rois):
+        """Load ROIs from a list of ROI objects (clears existing first)."""
+        self.clearROIs()
+        for roi in rois:
+            self.roiManager.addRoi(roi)

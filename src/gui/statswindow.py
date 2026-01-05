@@ -106,8 +106,6 @@ class roiStatsWindow(qt.QWidget):
         This reads the value from the internal _statsROITable. For 0D ROIs it returns the value.
         """
         handler = self.statsWidget.getStatsHandler()
-        print(handler.stats)
-        handler.stats.add() 
         table = self.statsWidget._statsROITable
         meanColumn = None
         # Find the column index for the 'mean' stat.
@@ -218,15 +216,18 @@ class TimeseriesWorker(qt.QThread):
 
             new_value = self.getMean(roi)
             if new_value is not None:
-                if self.meanarray[name].size == self.framenum:
-                    self.meanarray[name] = numpy.resize(self.meanarray[name], self.framenum + 2)
+                # Ensure array is large enough to hold the value at framenum index
+                if self.meanarray[name].size <= self.framenum:
+                    # Resize to framenum + 1 (minimum needed) plus some extra space
+                    new_size = self.framenum + 100
+                    old_array = self.meanarray[name]
+                    self.meanarray[name] = numpy.zeros(new_size)
+                    if old_array.size > 0:
+                        self.meanarray[name][:old_array.size] = old_array
                 self.meanarray[name][self.framenum] = new_value
 
                 x = numpy.arange(self.framenum + 1)
                 y = self.meanarray[name][:self.framenum + 1]
-
-                #if x.size != y.size:
-                #    y = numpy.resize(y, x.size)
 
                 result[name] = (x, y, roi.getColor())
 
