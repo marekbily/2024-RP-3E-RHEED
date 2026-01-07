@@ -58,8 +58,10 @@ class roiStatsWindow(qt.QWidget):
         self._timeseries.plot.setBackend("opengl")
         self._timeseries.plot.setGraphGrid(False)
         
-        # Enable legend with colored boxes
-        self._timeseries.plot.setLegendVisible(True)
+        # Enable legend with colored boxes - access legend widget and show it
+        legend_widget = self._timeseries.plot.getLegendsDockWidget()
+        if legend_widget is not None:
+            legend_widget.show()
         
         self._timeseries.hide()
         
