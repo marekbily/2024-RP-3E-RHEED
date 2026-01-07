@@ -1,35 +1,55 @@
+"""
+ROI Statistics Window
+Custom implementation with non-blocking computation and timeseries plotting.
+"""
 from silx.gui import qt
-from silx.gui.plot.ROIStatsWidget import ROIStatsWidget
-from silx.gui.plot.StatsWidget import _ScalarFieldViewWrapper
-import numpy
+import numpy as np
 from silx.gui.plot import Plot1D
 from silx.gui.plot.StackView import StackView
+from gui.custom_stats_table import CustomROIStatsTable
+from gui.roi_data_cache import ROIDataCache
+from gui.roi_computation_engine import ROIComputationEngine
+
 
 class roiStatsWindow(qt.QWidget):
-    """Window that embeds the stats widget and button for launching time series of the ROIs."""
-
-    STATS = [
-    ("mean", numpy.mean)
-    ]
+    """Window that embeds the custom stats table and timeseries plot."""
 
     def __init__(self, parent=None, plot=None, stackview=None, roimanager=None):
         """
-        Create a window that embeds the stats widget and button for showing _timeseries of the ROIs.
-        stackview can be either a StackView or Plot2D instance.
+        Create a window with custom stats table and timeseries plotting.
+        
+        Args:
+            parent: Parent widget
+            plot: Plot2D instance
+            stackview: StackView or Plot2D instance
+            roimanager: RegionOfInterestManager instance
         """
+        super().__init__(parent)
+        
         assert plot is not None
-        qt.QMainWindow.__init__(self, parent)
         self._plot2d = plot
         self._view = stackview
-        layout = qt.QVBoxLayout(self)
-        self.statsWidget = ROIStatsWidget(plot=self._plot2d)
         self._roiManager = roimanager
         
+        # Initialize data cache and computation engine
+        self.data_cache = ROIDataCache()
+        self.computation_engine = ROIComputationEngine(self.data_cache)
+        
+        # Main layout
+        layout = qt.QVBoxLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(5)
+        
+        # Create custom stats table
+        self.statsTable = CustomROIStatsTable(self._roiManager, parent=self)
+        
+        # Timeseries plot window (hidden by default)
         self._timeseries = qt.QWidget()
-        self._timeseries.setLayout(qt.QVBoxLayout())
+        timeseries_layout = qt.QVBoxLayout()
+        self._timeseries.setLayout(timeseries_layout)
         self._timeseries.setWindowTitle("ROI Time Series")
         self._timeseries.plot = Plot1D()
-        self._timeseries.layout().addWidget(self._timeseries.plot)
+        timeseries_layout.addWidget(self._timeseries.plot)
         self._timeseries.plot.setGraphXLabel("Frame number")
         self._timeseries.plot.setGraphYLabel("Intensity")
         self._timeseries.plot.setGraphTitle("ROI Time Series")
@@ -37,203 +57,272 @@ class roiStatsWindow(qt.QWidget):
         self._timeseries.plot.setActiveCurveHandling(False)
         self._timeseries.plot.setBackend("opengl")
         self._timeseries.plot.setGraphGrid(False)
-        self._timeseries.hide()
-
-        self._meanarray = {[roi.getName()]: numpy.array([]) for roi in self.statsWidget._rois}
-        self._first_frames = {[roi.getName()]: int for roi in self.statsWidget._rois}
-
-        ''' Main layout for the custom widget
-        layout = qt.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
-        '''
         
-        # Create a horizontal layout for the time series button
+        # Enable legend with colored boxes
+        self._timeseries.plot.setLegendVisible(True)
+        
+        self._timeseries.hide()
+        
+        # Button layout
         btnLayout = qt.QHBoxLayout()
         btnLayout.setAlignment(qt.Qt.AlignmentFlag.AlignVCenter)
-        timeseriesbutton = qt.QPushButton("Show Timeseries Plot", self)
-        roisbutton = qt.QPushButton("Add All ROIs", self)
+        
+        self.timeseriesButton = qt.QPushButton("Show Timeseries Plot", self)
+        self.addAllButton = qt.QPushButton("Add All ROIs", self)
+        
         btnLayout.addStretch(2)
-        btnLayout.addWidget(roisbutton)
-        btnLayout.addWidget(timeseriesbutton)
-
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(5)
-        layout.addWidget(self.statsWidget)
+        btnLayout.addWidget(self.addAllButton)
+        btnLayout.addWidget(self.timeseriesButton)
+        
+        # Add widgets to layout
+        layout.addWidget(self.statsTable)
         layout.addLayout(btnLayout)
-
-        self.statsWidget._setUpdateMode("manual")
-        self.setStats(self.STATS)
-        timeseriesbutton.clicked.connect(self.showTimeseries)
-        roisbutton.clicked.connect(self.addAllRois)
+        
+        # Connect signals
+        self.statsTable.roiAddRequested.connect(self._on_roi_added)
+        self.statsTable.roiRemoveRequested.connect(self._on_roi_removed)
+        self.timeseriesButton.clicked.connect(self.showTimeseries)
+        self.addAllButton.clicked.connect(self.addAllRois)
+        
+        # Connect computation engine signals
+        self.computation_engine.currentFrameReady.connect(self._on_current_frame_ready)
+        self.computation_engine.bulkProgressUpdated.connect(self._on_bulk_progress)
+        self.computation_engine.bulkAnalysisComplete.connect(self._on_bulk_complete)
+        self.computation_engine.errorOccurred.connect(self._on_computation_error)
+        
+        # Start computation engine
+        self.computation_engine.start()
+        
+        # Track current dataset info
+        self._dataset = None
+        self._total_frames = 0
+        self._current_frame_index = 0
+    
+    def setDataset(self, dataset):
+        """
+        Set the dataset for ROI analysis.
+        
+        Args:
+            dataset: Numpy array or h5py dataset with shape (N, H, W) or (H, W)
+        """
+        self._dataset = dataset
+        
+        if dataset is not None:
+            if dataset.ndim == 3:
+                self._total_frames = dataset.shape[0]
+            elif dataset.ndim == 2:
+                self._total_frames = 1
+            else:
+                self._total_frames = 0
+        else:
+            self._total_frames = 0
+        
+        # Update computation engine
+        self.computation_engine.set_dataset(dataset)
+        
+        # Resize cache for all existing ROIs
+        self.data_cache.resize_dataset(self._total_frames)
+        
+        # Re-queue bulk analysis for all ROIs
+        for roi_name in self.statsTable.get_roi_names():
+            roi = self.data_cache.get_roi_ref(roi_name)
+            if roi is not None:
+                self.computation_engine.queue_bulk_analysis(roi_name, roi, self._total_frames)
+    
+    def updateCurrentFrame(self, frame_index, frame_data=None):
+        """
+        Update statistics for the current frame.
+        
+        Args:
+            frame_index: Current frame number (0-based)
+            frame_data: Optional 2D frame data (will be extracted from dataset if not provided)
+        """
+        self._current_frame_index = frame_index
+        
+        # Get frame data if not provided
+        if frame_data is None and self._dataset is not None:
+            try:
+                if self._dataset.ndim == 3:
+                    frame_data = self._dataset[frame_index]
+                elif self._dataset.ndim == 2:
+                    frame_data = self._dataset
+            except Exception as e:
+                print(f"Error extracting frame data: {e}")
+                return
+        
+        if frame_data is None:
+            return
+        
+        # Build list of ROIs to compute
+        roi_list = []
+        for roi_name in self.statsTable.get_roi_names():
+            roi = self.data_cache.get_roi_ref(roi_name)
+            if roi is not None:
+                roi_list.append((roi_name, roi))
+        
+        if len(roi_list) > 0:
+            # Queue priority computation for current frame
+            self.computation_engine.queue_current_frame(frame_index, frame_data, roi_list)
+    
+    def _on_roi_added(self, roi):
+        """Handle ROI added to stats table."""
+        roi_name = roi.getName()
+        color = roi.getColor() if hasattr(roi, 'getColor') else qt.QColor(255, 0, 0)
+        
+        # Add to cache
+        self.data_cache.add_roi(roi_name, roi, self._total_frames, color)
+        
+        # Queue bulk analysis
+        if self._total_frames > 0:
+            self.computation_engine.queue_bulk_analysis(roi_name, roi, self._total_frames)
+        
+        # Compute current frame immediately
+        if self._dataset is not None:
+            try:
+                if self._dataset.ndim == 3:
+                    frame_data = self._dataset[self._current_frame_index]
+                elif self._dataset.ndim == 2:
+                    frame_data = self._dataset
+                else:
+                    return
+                
+                self.computation_engine.queue_current_frame(
+                    self._current_frame_index, 
+                    frame_data, 
+                    [(roi_name, roi)]
+                )
+            except Exception as e:
+                print(f"Error computing initial frame for {roi_name}: {e}")
+    
+    def _on_roi_removed(self, roi_name):
+        """Handle ROI removed from stats table."""
+        # Remove from cache
+        self.data_cache.remove_roi(roi_name)
+        
+        # Update timeseries plot if open
+        if self._timeseries.isVisible():
+            self._update_timeseries_plot()
+    
+    def _on_current_frame_ready(self, roi_name, mean_value):
+        """Handle current frame computation result."""
+        # Update table display
+        self.statsTable.update_mean_value(roi_name, mean_value)
+    
+    def _on_bulk_progress(self, roi_name, computed_frames, total_frames):
+        """Handle bulk computation progress update."""
+        # Update progress display
+        self.statsTable.update_progress(roi_name, computed_frames, total_frames)
+        
+        # Update timeseries plot if visible
+        if self._timeseries.isVisible():
+            self._update_timeseries_plot()
+    
+    def _on_bulk_complete(self, roi_name):
+        """Handle bulk computation completion."""
+        # Mark as complete
+        self.statsTable.mark_complete(roi_name)
+        
+        # Update timeseries plot if visible
+        if self._timeseries.isVisible():
+            self._update_timeseries_plot()
+    
+    def _on_computation_error(self, roi_name, error_message):
+        """Handle computation error."""
+        print(f"Computation error for {roi_name}: {error_message}")
 
     def addAllRois(self):
-        """Add all ROIs to the stats widget and update the plot."""
-        # Get all ROIs from the ROI manager
-        try : 
-            if self._roiManager is None:
-                return
-            rois = self._roiManager.getRois()
-            for roi in rois:
-                self.statsWidget.addItem(plotItem=self._plot2d.getImage(), roi=roi)
-        except Exception:
-            qt.QMessageBox.warning(self, "No Plot2D","It is not possible to add ROIs until there is a "+
-                                   "base plot to make analysis from.")
+        """Add all available ROIs to the stats table."""
+        if self._roiManager is None:
+            qt.QMessageBox.warning(self, "No ROI Manager", 
+                                  "ROI manager is not available.")
             return
-
-        # Update the timeseries plot with the new ROIs
+        
+        available_rois = self._roiManager.getRois()
+        
+        if len(available_rois) == 0:
+            qt.QMessageBox.information(self, "No ROIs",
+                                      "No ROIs have been created yet.")
+            return
+        
+        # Add each ROI that's not already in the table
+        added_count = 0
+        for roi in available_rois:
+            roi_name = roi.getName()
+            if not self.statsTable.has_roi(roi_name):
+                # Add to table
+                self.statsTable._add_table_row(roi)
+                self.statsTable.roi_names_in_table.add(roi_name)
+                
+                # Trigger computation
+                self._on_roi_added(roi)
+                added_count += 1
+        
+        if added_count > 0:
+            qt.QMessageBox.information(self, "ROIs Added",
+                                      f"Added {added_count} ROI(s) to statistics.")
+        else:
+            qt.QMessageBox.information(self, "No New ROIs",
+                                      "All available ROIs are already in the statistics table.")
     
     def showTimeseries(self):
-            self.updateTimeseriesAsync()
-            self._timeseries.show()
-            if self._view is not None:
-                # Connect appropriate signal based on view type
-                if isinstance(self._view, StackView):
-                    self._view.sigStackChanged.connect(self._dataset_size_changed)
-                else:
-                    # For Plot2D, connect to active image changed signal
-                    self._view.sigActiveImageChanged.connect(self._dataset_size_changed)
-
-    def _dataset_size_changed(self):
-        """Update the x-axis limits of the time series plot when the dataset size changes."""
-        #(data, info) = self._view.getStack(copy=True, returnNumpyArray=True)
-        #print(data.size)
-        #self._timeseries.plot.setGraphXLimits(0, data.size)
-
-    def _getMeanForROI(self, roi):
-        print(roi)
-        """Return the current computed mean stat for the given ROI.
-        This reads the value from the internal _statsROITable. For 0D ROIs it returns the value.
-        """
-        handler = self.statsWidget.getStatsHandler()
-        table = self.statsWidget._statsROITable
-        meanColumn = None
-        # Find the column index for the 'mean' stat.
-        for col in range(table.columnCount()):
-            header = table.horizontalHeaderItem(col)
-            if header and header.data(qt.Qt.ItemDataRole.UserRole) == 'mean':
-                meanColumn = col
-                break
-
-        if meanColumn is None:
-            print("Mean column not found")
-            return None
-
-        # Now locate the row corresponding to the ROI by matching its name.
-        meanValue = None
-        for row in range(table.rowCount()):
-            roiItem = table.item(row, 2)  # Column 2 is used for ROI name.
-            if roiItem and roiItem.text() == roi.getName():
-                meanItem = table.item(row, meanColumn)
-                if meanItem:
-                    try:
-                        #condition check for single point ROIs
-                        if meanItem.text() != "":
-                            meanValue = float(meanItem.text())
-                    except ValueError:
-                        print("Could not convert mean value to float")
-                        meanValue = None
-                break
-
-        return meanValue
-
-
-    def setStats(self, stats):
-        self.statsWidget.setStats(stats=stats)
-
-        self.roiUpdateTimer = qt.QTimer(self)
-        self.roiUpdateTimer.timeout.connect(lambda: self.statsWidget._updateAllStats(is_request=True))
-        self.roiUpdateTimer.start(50)
-
-    def addItem(self, item, roi):
-        self.statsWidget.addItem(roi=roi, plotItem=item)
-
-    def removeItem(self, item):
-        self.statsWidget.removeItem(item)
-
-    def registerRoi(self, roi):
-        #Register a newly created ROI with the stats widget.
-        self.statsWidget.registerROI(roi)
-
-    def unregisterRoi(self, roi):
-        print("not actually unregistering any roi")
-        #Unregister a ROI in the stats widget.
-        #self.statsWidget._statsROITable.unregisterROI(roi)
-        #self._statsWidget
-
-    def updateTimeseriesAsync(self):
-        
-        if self._view is None:
-            print("Warning: view not set for timeseries update")
-            return
-        
-        # Get frame number based on view type
-        if isinstance(self._view, StackView):
-            framenum = self._view.getFrameNumber()
-        else:
-            # For Plot2D, frame number is 0 to signalize real-time view mode
-            framenum = None
-        
-        self.worker = TimeseriesWorker(
-            rois=self.statsWidget._rois,
-            meanarray=self._meanarray,
-            first_frames=self._first_frames,
-            getMeanFunc=self._getMeanForROI,
-            frameNumber=framenum
-        )
-        self.worker.updated.connect(self._plotTimeseries)
-        self.worker.start()
-
-    def _plotTimeseries(self, data):
+        """Show the timeseries plot window."""
+        self._update_timeseries_plot()
+        self._timeseries.show()
+    
+    def _update_timeseries_plot(self):
+        """Update the timeseries plot with current data."""
         self._timeseries.plot.clear()
-        for name, (x, y, color) in data.items():
-            self.c = self._timeseries.plot.addCurve(x, y, legend=name)
-            self.c.setColor(color)
+        
+        # Plot each ROI
+        for roi_name in self.statsTable.get_roi_names():
+            frames, means = self.data_cache.get_all_means(roi_name)
+            
+            if len(frames) > 0:
+                color = self.data_cache.get_color(roi_name)
+                curve = self._timeseries.plot.addCurve(frames, means, legend=roi_name)
+                curve.setColor(color)
+    
+    def registerRoi(self, roi):
+        """
+        Register a newly created ROI (called when ROI is drawn).
+        This is a compatibility method - does nothing as user must manually add ROIs.
+        
+        Args:
+            roi: ROI object
+        """
+        # In the new system, users must explicitly add ROIs using the + button
+        # This prevents automatic addition that caused freezing
+        pass
+    
+    def unregisterRoi(self, roi):
+        """
+        Unregister a ROI (called when ROI is deleted from manager).
+        
+        Args:
+            roi: ROI object
+        """
+        roi_name = roi.getName()
+        
+        # Remove from table if present
+        if self.statsTable.has_roi(roi_name):
+            # Find and remove row
+            for row in range(self.statsTable.table.rowCount()):
+                item = self.statsTable.table.item(row, 1)
+                if item and item.text() == roi_name:
+                    self.statsTable.table.removeRow(row)
+                    self.statsTable.roi_names_in_table.discard(roi_name)
+                    break
+            
+            # Remove from cache
+            self.data_cache.remove_roi(roi_name)
+    
+    def cleanup(self):
+        """Clean up resources when closing."""
+        # Stop computation engine
+        if hasattr(self, 'computation_engine'):
+            self.computation_engine.stop()
+        
+        # Close timeseries window
+        if hasattr(self, '_timeseries'):
+            self._timeseries.close()
 
-class TimeseriesWorker(qt.QThread):
-    updated = qt.Signal(dict)
-
-    def __init__(self, rois, meanarray, first_frames, getMeanFunc, frameNumber):
-        super().__init__()
-        self._running = True
-        self.rois = rois
-        self.meanarray = meanarray
-        self.first_frames = first_frames
-        self.getMean = getMeanFunc
-        if frameNumber is None:
-            self.framenum = max((meanarray[roi].size - 1 for roi in meanarray.keys()), default=0) + 1
-        else:
-            self.framenum = frameNumber
-
-    def run(self):
-        result = {}
-        for roi in self.rois:
-            if not self._running:
-                break
-            name = roi.getName()
-            if name not in self.meanarray:
-                self.meanarray[name] = numpy.array([])
-
-            new_value = self.getMean(roi)
-            if new_value is not None:
-                # Ensure array is large enough to hold the value at framenum index
-                if self.meanarray[name].size <= self.framenum:
-                    # Resize to framenum + 1 (minimum needed) plus some extra space
-                    new_size = self.framenum + 100
-                    old_array = self.meanarray[name]
-                    self.meanarray[name] = numpy.zeros(new_size)
-                    if old_array.size > 0:
-                        self.meanarray[name][:old_array.size] = old_array
-                self.meanarray[name][self.framenum] = new_value
-
-                x = numpy.arange(self.framenum + 1)
-                y = self.meanarray[name][:self.framenum + 1]
-
-                result[name] = (x, y, roi.getColor())
-
-        if self._running:
-            self.updated.emit(result)
-
-    def quit(self):
-        self._running = False
-        super().quit()

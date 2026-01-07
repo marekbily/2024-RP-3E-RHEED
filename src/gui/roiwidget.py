@@ -124,7 +124,36 @@ class roiManagerWidget(qt.QWidget):
 
     # Clear all ROIs from the plot
     def clearROIs(self):
-        for each in self.roiManager.getRois():
+        # Check if there are any ROIs to clear
+        rois = self.roiManager.getRois()
+        if len(rois) == 0:
+            qt.QMessageBox.information(
+                self,
+                "No ROIs to Clear",
+                "There are no ROIs to clear."
+            )
+            return
+        
+        # Show confirmation dialog
+        reply = qt.QMessageBox.question(
+            self,
+            "Clear All ROIs?",
+            f"This action will permanently remove all {len(rois)} ROI(s) from the image.\n\n"
+            "This will:\n"
+            "• Delete all ROI drawings from the image\n"
+            "• Remove ROIs from the statistics and timeseries\n"
+            "• Clear all computed data for these ROIs\n\n"
+            "Note: This does not delete saved ROI files (.ini/.json).\n\n"
+            "Are you sure you want to continue?",
+            qt.QMessageBox.Yes | qt.QMessageBox.No,
+            qt.QMessageBox.No
+        )
+        
+        if reply != qt.QMessageBox.Yes:
+            return
+        
+        # Clear all ROIs
+        for each in rois:
             self.roiManager.removeRoi(each)
 
     def setEmbedEnabled(self, enabled, checked=True):

@@ -127,8 +127,8 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
          # widget for displaying stats results
         self._statsWidget = roiStatsWindow(parent=self, plot=self.plot, stackview=self.view, roimanager=self._regionManagerWidget.roiManager)
         
-        #self.view.sigFrameChanged.connect(self._update_hidden_plot)
-        self.view.sigFrameChanged.connect(self._statsWidget.updateTimeseriesAsync)
+        # Connect frame change signal to update current frame stats
+        self.view.sigFrameChanged.connect(self._on_frame_changed)
 
         # create Dock widgets
         self._roisTabWidgetDockWidget = qt.QDockWidget(parent=self)
@@ -141,7 +141,7 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self.addDockWidget(qt.Qt.DockWidgetArea.RightDockWidgetArea, self._roiStatsWindowDockWidget)
 
         # Connect ROI signal to register ROI automatically
-        self._regionManagerWidget.roiManager.sigRoiAdded.connect(self._statsWidget.registerRoi)
+        self._regionManagerWidget.roiManager.sigRoiAdded.connect(self._on_roi_drawn)
         self._regionManagerWidget.roiManager.sigRoiAboutToBeRemoved.connect(self._statsWidget.unregisterRoi)
 
         # Add ROI tab (will already be added if first creation was in _rebuild_roi_manager)
@@ -207,6 +207,10 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             print(image_dataset)
             self.view.setStack(image_dataset)
             self.view.setFrameNumber(0)
+            
+            # Update stats widget with new dataset
+            self._statsWidget.setDataset(image_dataset)
+            
             # Show browser controls when dataset is loaded
             self.view._browser.setVisible(True)
             self.view._browser_label.setVisible(True)
@@ -228,6 +232,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         
         # Clear the StackView (releases dataset reference, removes ROIs)
         self.view.setStack(None)
+        
+        # Update stats widget to clear dataset
+        self._statsWidget.setDataset(None)
         
         # Close any open playback file (must be closed before we can write ROIs)
         if self.playback is not None:
@@ -370,6 +377,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
                 #self._hiddenPlot2D.addImage(frame)
                 self.view.setStack(self.camera.latest_frame)
                 self.view.setFrameNumber(0)
+                
+                # Update stats widget with live frame dataset
+                self._statsWidget.setDataset(self.camera.latest_frame)
 
             # connect the resize callback to the camera
             #self.camera.on_resize = lambda new_dataset: self.dataResized.emit(self.plot, new_dataset)
@@ -443,6 +453,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self._recording_dataset_bound = False  # Track if we've bound the dataset
         self.current_h5_path = file_path  # Track for ROI embedding
         
+        # Update stats widget with recording dataset (will be set properly in camera loop)
+        # For now, just notify that we're starting recording
+        
         # Show browser controls for navigating recorded frames (but don't bind dataset yet - wait for first frame)
         self._set_browse_controls_visible(True)
         # Check sync by default so user sees live recording
@@ -508,6 +521,10 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
                         current_frame = self.view.getFrameNumber() if self._recording_dataset_bound else 0
                         self.view.setStack(self.camera.image_dataset)
                         self._recording_dataset_bound = True
+                        
+                        # Update stats widget with recording dataset
+                        self._statsWidget.setDataset(self.camera.image_dataset)
+                        
                         # Set initial range
                         self.view._browser.setRange(0, frame_count - 1)
                         # Restore frame position (clamped to valid range)
@@ -535,6 +552,39 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
                     frame = self.camera.latest_frame[0] if self.camera.latest_frame.ndim == 3 else self.camera.latest_frame
                     self.current_frame = frame
                     self.plot.addImage(self.current_frame, replace=True, resetzoom=False)
+                    
+                    # Update stats widget with current live frame
+                    self._statsWidget.updateCurrentFrame(0, frame)
+    
+    def _on_frame_changed(self, frame_index):
+        """Handle frame change in StackView - update stats for new frame."""
+        # Get current frame data from view
+        stack = self.view.getStack(copy=False, returnNumpyArray=False)
+        
+        if stack is not None and len(stack) > frame_index:
+            try:
+                if hasattr(stack, '__getitem__'):
+                    frame_data = stack[frame_index]
+                else:
+                    frame_data = None
+                
+                # Update stats widget
+                self._statsWidget.updateCurrentFrame(frame_index, frame_data)
+            except Exception as e:
+                print(f"Error updating frame stats: {e}")
+    
+    def _on_roi_drawn(self, roi):
+        """
+        Handle when a new ROI is drawn.
+        In the new system, ROIs are not automatically added to stats.
+        Just register it as available.
+        
+        Args:
+            roi: The newly drawn ROI object
+        """
+        # Don't automatically add to stats (prevents freezing)
+        # User must use the + button to add ROI to analysis
+        pass
             
     def _about_menu(self):
         aw = AboutWindow(self)
@@ -678,6 +728,10 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         # Save ROIs using captured data before cleanup clears them
         if h5_path_to_save is not None:
             self._save_rois_to_current_h5(rois=captured_rois, embed_enabled=captured_embed_enabled, h5_path=h5_path_to_save)
+        
+        # Cleanup stats widget (stop computation engine)
+        if hasattr(self, '_statsWidget'):
+            self._statsWidget.cleanup()
         
         self._stop_camera()
         super().closeEvent(event)
