@@ -99,14 +99,143 @@ class roiStatsWindow(qt.QWidget):
         self._dataset = None
         self._total_frames = 0
         self._current_frame_index = 0
+        
+        # Track live capture mode
+        self._is_live_mode = False
+    
+    def setLiveMode(self, active):
+        """
+        Enable or disable live capture mode for real-time stats tracking.
+        
+        Args:
+            active: True to enable live mode, False to disable
+        """
+        self._is_live_mode = active
+        self.data_cache.set_live_mode(active)
+        
+        if active:
+            # Starting live mode
+            print("Live capture mode enabled - tracking real-time statistics")
+    
+    def promptSaveLiveData(self):
+        """
+        Prompt user to save live capture data before switching modes.
+        
+        Returns:
+            bool: True if user chose to proceed (save or discard), False if cancelled
+        """
+        if not self.data_cache.has_live_data():
+            return True  # No data to save, proceed
+        
+        frame_count = self.data_cache.get_live_frame_count()
+        roi_count = len(self.statsTable.get_roi_names())
+        
+        dialog = qt.QMessageBox(self)
+        dialog.setWindowTitle("Save Live Capture Data?")
+        dialog.setText(f"You have captured {frame_count} frames of real-time statistics data for {roi_count} ROI(s).")
+        dialog.setInformativeText("Do you want to save this data before switching modes?")
+        
+        save_btn = dialog.addButton("Save to HDF5", qt.QMessageBox.AcceptRole)
+        discard_btn = dialog.addButton("Discard", qt.QMessageBox.DestructiveRole)
+        cancel_btn = dialog.addButton("Cancel", qt.QMessageBox.RejectRole)
+        dialog.setDefaultButton(save_btn)
+        
+        dialog.exec()
+        
+        clicked = dialog.clickedButton()
+        
+        if clicked == save_btn:
+            # Save to HDF5 file
+            return self._save_live_data_dialog()
+        elif clicked == discard_btn:
+            # Clear live data and proceed
+            self.data_cache.clear_live_data()
+            return True
+        else:
+            # Cancel - don't proceed
+            return False
+    
+    def _save_live_data_dialog(self):
+        """
+        Show file dialog and save live data to HDF5.
+        
+        Returns:
+            bool: True if saved successfully or user chose to skip, False if cancelled
+        """
+        import datetime
+        import os
+        
+        # Default filename with timestamp
+        default_name = f"live_timeseries_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.h5"
+        default_path = os.path.join(os.getcwd(), "cacheimg", default_name)
+        
+        file_path, _ = qt.QFileDialog.getSaveFileName(
+            self,
+            "Save Live Capture Data",
+            default_path,
+            "HDF5 Files (*.h5);;All Files (*)"
+        )
+        
+        if not file_path:
+            # User cancelled file dialog - ask if they want to discard
+            reply = qt.QMessageBox.question(
+                self,
+                "Discard Data?",
+                "No file selected. Do you want to discard the live capture data?",
+                qt.QMessageBox.Yes | qt.QMessageBox.No,
+                qt.QMessageBox.No
+            )
+            if reply == qt.QMessageBox.Yes:
+                self.data_cache.clear_live_data()
+                return True
+            return False
+        
+        # Ensure .h5 extension
+        if not file_path.endswith('.h5'):
+            file_path += '.h5'
+        
+        # Collect ROI data if available
+        rois_to_save = None
+        if self._roiManager is not None:
+            # Get all ROIs from the manager
+            rois_to_save = list(self._roiManager.getRois())
+        
+        # Save to HDF5
+        success = self.data_cache.export_live_data_to_h5(file_path, rois_to_save)
+        
+        if success:
+            qt.QMessageBox.information(
+                self,
+                "Data Saved",
+                f"Live capture data saved to:\n{file_path}"
+            )
+            self.data_cache.clear_live_data()
+            return True
+        else:
+            qt.QMessageBox.warning(
+                self,
+                "Save Failed",
+                "Failed to save live capture data. Please try again."
+            )
+            return False
     
     def setDataset(self, dataset):
         """
         Set the dataset for ROI analysis.
+        Prompts to save live data if switching from live mode.
         
         Args:
             dataset: Numpy array or h5py dataset with shape (N, H, W) or (H, W)
         """
+        # Check if we're switching from live mode to dataset mode
+        if self._is_live_mode and dataset is not None:
+            # Prompt user about live data
+            if not self.promptSaveLiveData():
+                return  # User cancelled, don't switch
+            
+            # Disable live mode
+            self.setLiveMode(False)
+        
         self._dataset = dataset
         
         if dataset is not None:
@@ -164,7 +293,13 @@ class roiStatsWindow(qt.QWidget):
         
         if len(roi_list) > 0:
             # Queue priority computation for current frame
-            self.computation_engine.queue_current_frame(frame_index, frame_data, roi_list)
+            # Pass live_mode flag so engine knows to store in live cache
+            self.computation_engine.queue_current_frame(
+                frame_index, 
+                frame_data, 
+                roi_list,
+                is_live_mode=self._is_live_mode
+            )
     
     def _on_roi_added(self, roi):
         """Handle ROI added to stats table."""
@@ -209,6 +344,10 @@ class roiStatsWindow(qt.QWidget):
         """Handle current frame computation result."""
         # Update table display
         self.statsTable.update_mean_value(roi_name, mean_value)
+        
+        # In live mode, also update timeseries plot in real-time
+        if self._is_live_mode and self._timeseries.isVisible():
+            self._update_timeseries_plot()
     
     def _on_bulk_progress(self, roi_name, computed_frames, total_frames):
         """Handle bulk computation progress update."""
@@ -277,7 +416,11 @@ class roiStatsWindow(qt.QWidget):
         
         # Plot each ROI
         for roi_name in self.statsTable.get_roi_names():
-            frames, means = self.data_cache.get_all_means(roi_name)
+            # Get data based on current mode
+            if self._is_live_mode:
+                frames, means = self.data_cache.get_live_means(roi_name)
+            else:
+                frames, means = self.data_cache.get_all_means(roi_name)
             
             if len(frames) > 0:
                 color = self.data_cache.get_color(roi_name)

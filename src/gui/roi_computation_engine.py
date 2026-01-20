@@ -15,10 +15,10 @@ class ROIComputationWorker(qt.QRunnable):
     
     class Signals(qt.QObject):
         """Signals for the worker (QRunnable can't have signals directly)."""
-        finished = qt.Signal(str, int, float)  # roi_name, frame_index, mean_value
+        finished = qt.Signal(str, int, float, bool)  # roi_name, frame_index, mean_value, is_live_mode
         error = qt.Signal(str, str)  # roi_name, error_message
     
-    def __init__(self, roi_name, roi, frame_index, frame_data, cache):
+    def __init__(self, roi_name, roi, frame_index, frame_data, cache, is_live_mode=False):
         """
         Initialize worker for single ROI computation.
         
@@ -28,6 +28,7 @@ class ROIComputationWorker(qt.QRunnable):
             frame_index: Frame number
             frame_data: 2D numpy array
             cache: ROIDataCache instance
+            is_live_mode: If True, store in live cache instead of dataset cache
         """
         super().__init__()
         self.roi_name = roi_name
@@ -35,6 +36,7 @@ class ROIComputationWorker(qt.QRunnable):
         self.frame_index = frame_index
         self.frame_data = frame_data
         self.cache = cache
+        self.is_live_mode = is_live_mode
         self.signals = ROIComputationWorker.Signals()
         self.setAutoDelete(True)
     
@@ -43,11 +45,14 @@ class ROIComputationWorker(qt.QRunnable):
         try:
             mean_value = ROIMaskUtils.compute_mean_for_roi(self.roi, self.frame_data)
             
-            # Store in cache
-            self.cache.set_mean(self.roi_name, self.frame_index, mean_value)
+            # Store in appropriate cache based on mode
+            if self.is_live_mode:
+                self.cache.append_live_mean(self.roi_name, mean_value)
+            else:
+                self.cache.set_mean(self.roi_name, self.frame_index, mean_value)
             
             # Emit success signal
-            self.signals.finished.emit(self.roi_name, self.frame_index, mean_value)
+            self.signals.finished.emit(self.roi_name, self.frame_index, mean_value, self.is_live_mode)
             
         except Exception as e:
             error_msg = f"Error computing frame {self.frame_index} for {self.roi_name}: {e}"
@@ -121,7 +126,7 @@ class ROIComputationEngine(qt.QThread):
         """
         self.task_queue.put(('bulk', roi_name, roi, total_frames))
     
-    def queue_current_frame(self, frame_index, frame_data, roi_list):
+    def queue_current_frame(self, frame_index, frame_data, roi_list, is_live_mode=False):
         """
         Queue a high-priority current frame update.
         
@@ -129,8 +134,9 @@ class ROIComputationEngine(qt.QThread):
             frame_index: Current frame number
             frame_data: 2D numpy array of current frame
             roi_list: List of (roi_name, roi) tuples to compute
+            is_live_mode: If True, store results in live cache
         """
-        self.priority_queue.put(('current', frame_index, frame_data, roi_list))
+        self.priority_queue.put(('current', frame_index, frame_data, roi_list, is_live_mode))
     
     def pause(self):
         """Pause bulk computation (priority tasks still process)."""
@@ -186,7 +192,7 @@ class ROIComputationEngine(qt.QThread):
     
     def _process_priority_task(self, task):
         """Process a high-priority current frame update - uses thread pool for parallel computation."""
-        task_type, frame_index, frame_data, roi_list = task
+        task_type, frame_index, frame_data, roi_list, is_live_mode = task
         
         if task_type != 'current':
             return
@@ -197,8 +203,8 @@ class ROIComputationEngine(qt.QThread):
         self._pending_lock.unlock()
         
         for roi_name, roi in roi_list:
-            # Create worker for this ROI
-            worker = ROIComputationWorker(roi_name, roi, frame_index, frame_data, self.cache)
+            # Create worker for this ROI (pass is_live_mode flag)
+            worker = ROIComputationWorker(roi_name, roi, frame_index, frame_data, self.cache, is_live_mode)
             
             # Connect signals
             worker.signals.finished.connect(self._on_worker_finished)
@@ -207,7 +213,7 @@ class ROIComputationEngine(qt.QThread):
             # Submit to thread pool for parallel execution
             self.thread_pool.start(worker)
     
-    def _on_worker_finished(self, roi_name, frame_index, mean_value):
+    def _on_worker_finished(self, roi_name, frame_index, mean_value, is_live_mode):
         """Handle worker completion - called from worker thread."""
         # Emit signal for GUI update (thread-safe Qt signal)
         self.currentFrameReady.emit(roi_name, mean_value)

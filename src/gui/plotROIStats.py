@@ -170,6 +170,11 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             return
 
         try:
+            # Prompt to save live stats data before switching to file mode
+            if hasattr(self, '_statsWidget') and self._statsWidget is not None:
+                self._statsWidget.promptSaveLiveData()
+                self._statsWidget.setLiveMode(False)
+            
             # Close any previous playback file first (so we can save ROIs)
             if self.playback is not None:
                 try:
@@ -282,6 +287,11 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
 
     def _stop_camera(self):
         """Stop capture loop, timer, and release camera resources."""
+        # Prompt to save live stats before stopping camera
+        if hasattr(self, '_statsWidget') and self._statsWidget is not None:
+            self._statsWidget.promptSaveLiveData()
+            self._statsWidget.setLiveMode(False)
+        
         # Save ROIs before stopping camera if recording was active
         if self.camera is not None and self.camera.is_recording:
             self._save_rois_to_current_h5()
@@ -380,6 +390,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
                 
                 # Update stats widget with live frame dataset
                 self._statsWidget.setDataset(self.camera.latest_frame)
+            
+            # Enable live mode for stats tracking (camera preview without recording)
+            self._statsWidget.setLiveMode(True)
 
             # connect the resize callback to the camera
             #self.camera.on_resize = lambda new_dataset: self.dataResized.emit(self.plot, new_dataset)
@@ -427,6 +440,12 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         if self.camera is None:
             return
         
+        # Prompt to save live stats data before switching to recording mode
+        self._statsWidget.promptSaveLiveData()
+        
+        # Disable live mode - recording will use dataset-based stats
+        self._statsWidget.setLiveMode(False)
+        
         # Get default path from camera
         default_path = self.camera.get_default_recording_path()
         default_dir = os.path.dirname(default_path)
@@ -441,7 +460,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         )
         
         if not file_path:
-            return  # User cancelled
+            # User cancelled - re-enable live mode
+            self._statsWidget.setLiveMode(True)
+            return
         
         # Ensure .h5 extension
         if not file_path.endswith('.h5'):
@@ -492,6 +513,9 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         
         # Hide browser controls - back to live preview mode
         self._set_browse_controls_visible(False)
+        
+        # Re-enable live mode for stats tracking (back to live preview)
+        self._statsWidget.setLiveMode(True)
         
         if file_path and os.path.exists(file_path):
             qt.QMessageBox.information(self, "Recording Complete",

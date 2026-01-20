@@ -5,6 +5,8 @@ Thread-safe storage for computed ROI statistics.
 import numpy as np
 from silx.gui import qt
 import threading
+import datetime
+import os
 
 
 class ROIDataCache:
@@ -23,6 +25,45 @@ class ROIDataCache:
         #     'color': QColor for display
         # }}
         self._data = {}
+        
+        # Live capture mode storage (separate from dataset mode)
+        # Stores timeseries data captured during real-time camera preview
+        self._live_data = {}
+        self._live_frame_counter = 0
+        self._live_mode_active = False
+        self._live_start_time = None
+    
+    def set_live_mode(self, active):
+        """
+        Enable or disable live capture mode.
+        
+        Args:
+            active: True to enable live mode, False to disable
+        """
+        with self._lock:
+            if active and not self._live_mode_active:
+                # Starting live mode - reset counters
+                self._live_frame_counter = 0
+                self._live_start_time = datetime.datetime.now()
+            self._live_mode_active = active
+    
+    def is_live_mode(self):
+        """Check if live mode is active."""
+        with self._lock:
+            return self._live_mode_active
+    
+    def has_live_data(self):
+        """Check if there is any live capture data to save."""
+        with self._lock:
+            for roi_name in self._live_data:
+                if len(self._live_data[roi_name]['means']) > 0:
+                    return True
+            return False
+    
+    def get_live_frame_count(self):
+        """Get the number of frames captured in live mode."""
+        with self._lock:
+            return self._live_frame_counter
     
     def add_roi(self, roi_name, roi_ref, total_frames, color=None):
         """
@@ -45,12 +86,21 @@ class ROIDataCache:
                 'total_frames': total_frames,
                 'color': color
             }
+            
+            # Also initialize live data storage for this ROI
+            self._live_data[roi_name] = {
+                'means': [],  # Dynamic list for live mode
+                'timestamps': [],  # Store timestamps for each frame
+                'color': color
+            }
     
     def remove_roi(self, roi_name):
         """Remove an ROI from the cache."""
         with self._lock:
             if roi_name in self._data:
                 del self._data[roi_name]
+            if roi_name in self._live_data:
+                del self._live_data[roi_name]
     
     def has_roi(self, roi_name):
         """Check if ROI exists in cache."""
@@ -82,6 +132,151 @@ class ROIDataCache:
             
             data['means'][frame_index] = mean_value
             data['computed_frames'].add(frame_index)
+    
+    def append_live_mean(self, roi_name, mean_value, timestamp=None):
+        """
+        Append a mean value for live capture mode (auto-incrementing frame counter).
+        
+        Args:
+            roi_name: String identifier for the ROI
+            mean_value: Mean intensity value
+            timestamp: Optional timestamp (defaults to current time)
+        """
+        with self._lock:
+            if roi_name not in self._live_data:
+                return
+            
+            if timestamp is None:
+                timestamp = datetime.datetime.now()
+            
+            self._live_data[roi_name]['means'].append(mean_value)
+            self._live_data[roi_name]['timestamps'].append(timestamp)
+            
+            # Update frame counter to max across all ROIs
+            current_len = len(self._live_data[roi_name]['means'])
+            if current_len > self._live_frame_counter:
+                self._live_frame_counter = current_len
+    
+    def get_live_means(self, roi_name):
+        """
+        Get all live capture mean values for an ROI.
+        
+        Returns:
+            tuple: (frame_indices, mean_values) as numpy arrays
+        """
+        with self._lock:
+            if roi_name not in self._live_data:
+                return np.array([]), np.array([])
+            
+            means_list = self._live_data[roi_name]['means']
+            
+            if len(means_list) == 0:
+                return np.array([]), np.array([])
+            
+            frames = np.arange(len(means_list), dtype=np.int32)
+            means = np.array(means_list, dtype=np.float32)
+            
+            return frames, means
+    
+    def clear_live_data(self):
+        """Clear all live capture data but keep ROI registrations."""
+        with self._lock:
+            for roi_name in self._live_data:
+                self._live_data[roi_name]['means'] = []
+                self._live_data[roi_name]['timestamps'] = []
+            self._live_frame_counter = 0
+            self._live_start_time = None
+    
+    def export_live_data_to_h5(self, file_path, rois=None):
+        """
+        Export live capture data to HDF5 file with optional ROI data.
+        
+        This saves the timeseries data for each ROI (mean values over time),
+        and optionally the ROI definitions (geometry, name, color), but NOT
+        any source image data.
+        
+        Args:
+            file_path: Path to save HDF5 file
+            rois: Optional list of ROI objects to save (from ROI manager)
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        import h5py
+        from gui.roidictionary import roi_to_dict
+        
+        with self._lock:
+            try:
+                if not self.has_live_data():
+                    return False
+                
+                roi_names = list(self._live_data.keys())
+                if len(roi_names) == 0:
+                    return False
+                
+                with h5py.File(file_path, 'w') as f:
+                    # Add metadata
+                    f.attrs['type'] = 'live_timeseries'
+                    f.attrs['created'] = datetime.datetime.now().isoformat()
+                    f.attrs['frame_count'] = self._live_frame_counter
+                    if self._live_start_time is not None:
+                        f.attrs['start_time'] = self._live_start_time.isoformat()
+                    
+                    # Create timeseries group
+                    ts_group = f.create_group('timeseries')
+                    
+                    # Store each ROI's timeseries data
+                    for roi_name in roi_names:
+                        roi_group = ts_group.create_group(roi_name)
+                        
+                        # Store mean values
+                        means = self._live_data[roi_name]['means']
+                        if len(means) > 0:
+                            roi_group.create_dataset('means', data=np.array(means, dtype=np.float32))
+                            roi_group.create_dataset('frames', data=np.arange(len(means), dtype=np.int32))
+                        
+                        # Store timestamps as ISO strings
+                        timestamps = self._live_data[roi_name]['timestamps']
+                        if len(timestamps) > 0:
+                            ts_strings = [ts.isoformat() for ts in timestamps]
+                            dt = h5py.special_dtype(vlen=str)
+                            roi_group.create_dataset('timestamps', data=ts_strings, dtype=dt)
+                        
+                        # Store color if available
+                        if roi_name in self._live_data:
+                            color = self._live_data[roi_name].get('color')
+                            if color is not None and hasattr(color, 'name'):
+                                roi_group.attrs['color'] = color.name()
+                    
+                    # Save ROI definitions if provided
+                    if rois is not None and len(rois) > 0:
+                        rois_group = f.create_group('rois')
+                        
+                        for i, roi in enumerate(rois):
+                            roi_dict = roi_to_dict(roi)
+                            roi_name = roi_dict.get('name', f'roi_{i}')
+                            
+                            # Create group for this ROI
+                            roi_subgroup = rois_group.create_group(roi_name)
+                            
+                            # Store ROI properties
+                            for key, value in roi_dict.items():
+                                if isinstance(value, np.ndarray):
+                                    roi_subgroup.create_dataset(key, data=value)
+                                elif isinstance(value, str):
+                                    roi_subgroup.attrs[key] = value
+                                elif isinstance(value, (int, float)):
+                                    roi_subgroup.attrs[key] = value
+                    
+                    print(f"Saved live timeseries data to {file_path}")
+                
+                return True
+            except Exception as e:
+                print(f"Error exporting live data to HDF5: {e}")
+                import traceback
+                traceback.print_exc()
+                return False
+                return False
     
     def get_mean(self, roi_name, frame_index):
         """
@@ -172,6 +367,7 @@ class ROIDataCache:
         """Clear all cached data."""
         with self._lock:
             self._data.clear()
+            # Note: does not clear live data - use clear_live_data() for that
     
     def resize_dataset(self, new_total_frames):
         """
