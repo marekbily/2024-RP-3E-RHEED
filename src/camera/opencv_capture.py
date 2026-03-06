@@ -123,6 +123,12 @@ class CameraInit:
             chunks=(10, height, width),
             compression='gzip',
         )
+        
+        # Store recording metadata
+        self.recording_start_time = datetime.datetime.now()
+        self.h5_file.attrs['recording_fps'] = self.fps
+        self.h5_file.attrs['recording_start_timestamp'] = self.recording_start_time.isoformat()
+        
         self.is_recording = True
         self.frame_index = 0
         self.recording_file_path = file_path

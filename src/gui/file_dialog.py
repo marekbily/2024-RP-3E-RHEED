@@ -22,11 +22,12 @@ class VideoConversionWorker(qt.QThread):
     finished = qt.Signal(str)  # result path or empty on error
     error = qt.Signal(str)  # error message
     
-    def __init__(self, video_path, h5_path, total_frames):
+    def __init__(self, video_path, h5_path, total_frames, video_fps=None):
         super().__init__()
         self.video_path = video_path
         self.h5_path = h5_path
         self.total_frames = total_frames
+        self.video_fps = video_fps  # Original video FPS
         self._cancelled = False
     
     def cancel(self):
@@ -35,6 +36,12 @@ class VideoConversionWorker(qt.QThread):
     def run(self):
         try:
             with h5py.File(self.h5_path, 'w') as h5_file:
+                # Store video metadata
+                if self.video_fps is not None:
+                    h5_file.attrs['recording_fps'] = float(self.video_fps)
+                # Store conversion timestamp as recording start (best approximation for imported videos)
+                h5_file.attrs['recording_start_timestamp'] = time.strftime('%Y-%m-%dT%H:%M:%S')
+                
                 frame_iter = iio.imiter(self.video_path)
                 
                 try:
@@ -153,13 +160,13 @@ class ConversionProgressDialog(qt.QDialog):
         self._was_cancelled = False
         self._start_time = None
     
-    def start_conversion(self, video_path, h5_path, total_frames):
+    def start_conversion(self, video_path, h5_path, total_frames, video_fps=None):
         """Start the background conversion."""
         self.progressBar.setMaximum(total_frames if total_frames > 0 else 0)
         self.frameLabel.setText(f"Frame 0 / {total_frames}")
         self._start_time = time.time()
         
-        self.worker = VideoConversionWorker(video_path, h5_path, total_frames)
+        self.worker = VideoConversionWorker(video_path, h5_path, total_frames, video_fps)
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
         self.worker.error.connect(self._on_error)
@@ -230,19 +237,26 @@ class ConversionProgressDialog(qt.QDialog):
 
 
 def get_video_frame_count(video_path):
-    """Get the total frame count from a video file using metadata."""
+    """Get the total frame count and FPS from a video file using metadata.
+    
+    Returns:
+        tuple: (frame_count, fps) - fps may be None if not available
+    """
+    fps = None
     try:
         # Try to get frame count from metadata
         meta = iio.immeta(video_path)
+        if 'fps' in meta:
+            fps = meta['fps']
         if 'fps' in meta and 'duration' in meta:
-            return int(meta['fps'] * meta['duration'])
+            return int(meta['fps'] * meta['duration']), fps
         # Fallback: count frames (slower but accurate)
         count = 0
         for _ in iio.imiter(video_path):
             count += 1
-        return count
+        return count, fps
     except Exception:
-        return 0  # Unknown
+        return 0, None  # Unknown
 
 # Removed lazy wrapper to simplify behavior and avoid StackView issues
 
@@ -299,10 +313,22 @@ class H5Playback:
         self.frame_index = 0
         self.dataset_size = self.image_dataset.shape[0]
         self.on_resize = None  # for compatibility
+        
+        # Read recording metadata if available
+        self.recording_fps = self.h5_file.attrs.get('recording_fps', None)
+        self.recording_start_timestamp = self.h5_file.attrs.get('recording_start_timestamp', None)
 
     def capture_frame(self):
         frame = self.image_dataset[self.frame_index]
         return frame
+    
+    def get_recording_fps(self):
+        """Get the FPS at which the video was recorded. Returns None if not available."""
+        return self.recording_fps
+    
+    def get_recording_start_timestamp(self):
+        """Get the timestamp when recording started. Returns None if not available."""
+        return self.recording_start_timestamp
     
     def close(self):
         """Close the H5 file if open."""
@@ -344,12 +370,12 @@ def convert_video_to_h5(video_path, parent=None):
             # Corrupted file; remove it and reconvert
             os.remove(h5_path)
 
-    # Get frame count for progress bar
-    total_frames = get_video_frame_count(video_path)
+    # Get frame count and FPS for progress bar and metadata
+    total_frames, video_fps = get_video_frame_count(video_path)
     
     # Show progress dialog
     dialog = ConversionProgressDialog(parent)
-    dialog.start_conversion(video_path, h5_path, total_frames)
+    dialog.start_conversion(video_path, h5_path, total_frames, video_fps)
     
     result = dialog.exec()
     

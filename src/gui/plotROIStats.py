@@ -36,6 +36,14 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         # create a none sync button placeholder
         self.syncButton = None
         
+        # Time display labels (for recording/playback)
+        self.startTimeLabel = None  # Shows recording start timestamp
+        self.currentTimeLabel = None  # Shows current playback time
+        
+        # Recording metadata for time calculations
+        self.recording_fps = None
+        self.recording_start_timestamp = None
+        
         # store current frame for stats calculations
         self.current_frame = None
         
@@ -102,6 +110,11 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             camera_menu.addMenu(self.camera_recording_menu)
             camera_menu.aboutToShow.connect(self._update_camera_menu_state)
         
+        # add View menu for showing/hiding panels
+        view_menu = self.menu.addMenu("View")
+        # Placeholder actions - will be updated after dock widgets are created
+        self._view_menu = view_menu
+        
         # add about window
         about_action = qt.QAction("About", self)
         about_action.triggered.connect(self._about_menu)
@@ -131,14 +144,19 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self.view.sigFrameChanged.connect(self._on_frame_changed)
 
         # create Dock widgets
-        self._roisTabWidgetDockWidget = qt.QDockWidget(parent=self)
+        self._roisTabWidgetDockWidget = qt.QDockWidget("ROI Manager", parent=self)
         self._roisTabWidgetDockWidget.setWidget(self._roisTabWidget)
+        self._roisTabWidgetDockWidget.setObjectName("ROIManagerDock")
         self.addDockWidget(qt.Qt.DockWidgetArea.RightDockWidgetArea, self._roisTabWidgetDockWidget)
 
         # create Dock widgets
-        self._roiStatsWindowDockWidget = qt.QDockWidget(parent=self)
+        self._roiStatsWindowDockWidget = qt.QDockWidget("ROI Statistics", parent=self)
         self._roiStatsWindowDockWidget.setWidget(self._statsWidget)
+        self._roiStatsWindowDockWidget.setObjectName("ROIStatsDock")
         self.addDockWidget(qt.Qt.DockWidgetArea.RightDockWidgetArea, self._roiStatsWindowDockWidget)
+
+        # Add dock widget toggle actions to View menu
+        self._setup_view_menu()
 
         # Connect ROI signal to register ROI automatically
         self._regionManagerWidget.roiManager.sigRoiAdded.connect(self._on_roi_drawn)
@@ -216,9 +234,33 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             # Update stats widget with new dataset
             self._statsWidget.setDataset(image_dataset)
             
+            # Load recording metadata for time display
+            self.recording_fps = playback.get_recording_fps()
+            self.recording_start_timestamp = playback.get_recording_start_timestamp()
+            
+            # Get resolution from dataset
+            resolution = image_dataset.shape[1:3] if image_dataset.ndim == 3 else image_dataset.shape
+            
+            # Pass metadata to stats widget for timeseries plot (including file path and resolution)
+            self._statsWidget.setRecordingMetadata(
+                self.recording_fps, 
+                self.recording_start_timestamp,
+                file_path=self.current_h5_path,
+                resolution=resolution
+            )
+            
+            # Setup time labels if not already created
+            if self.startTimeLabel is None:
+                self._setup_time_labels()
+            self._update_time_labels(0)
+            
             # Show browser controls when dataset is loaded
             self.view._browser.setVisible(True)
             self.view._browser_label.setVisible(True)
+            if self.startTimeLabel is not None:
+                self.startTimeLabel.setVisible(True)
+            if self.currentTimeLabel is not None:
+                self.currentTimeLabel.setVisible(True)
             # Enable clear dataset action
             self.clear_dataset_action.setEnabled(True)
             
@@ -256,6 +298,12 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         # Clear current H5 path
         self.current_h5_path = None
         
+        # Clear recording metadata
+        self.recording_fps = None
+        self.recording_start_timestamp = None
+        self._update_time_labels(0)
+        self._statsWidget.setRecordingMetadata(None, None, file_path=None, resolution=None)
+        
         # Hide browser controls
         self._set_browse_controls_visible(False)
         
@@ -279,11 +327,87 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
             self.cmw.show()
 
     def _set_browse_controls_visible(self, visible):
-        """Show or hide the frame browser controls (slider, label, sync button)."""
+        """Show or hide the frame browser controls (slider, label, sync button, time labels)."""
         self.view._browser.setVisible(visible)
         self.view._browser_label.setVisible(visible)
         if self.syncButton is not None:
             self.syncButton.setVisible(visible)
+        if self.startTimeLabel is not None:
+            self.startTimeLabel.setVisible(visible)
+        if self.currentTimeLabel is not None:
+            self.currentTimeLabel.setVisible(visible)
+
+    def _format_time_offset(self, seconds):
+        """Format seconds as HH:MM:SS or MM:SS for display."""
+        if seconds < 0:
+            seconds = 0
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        else:
+            return f"{minutes:02d}:{secs:02d}"
+
+    def _update_time_labels(self, frame_index=0):
+        """Update the time display labels based on current frame and recording metadata."""
+        # Update start timestamp label
+        if self.startTimeLabel is not None and self.recording_start_timestamp is not None:
+            try:
+                # Parse ISO format timestamp and display as readable time
+                from datetime import datetime
+                if isinstance(self.recording_start_timestamp, str):
+                    dt = datetime.fromisoformat(self.recording_start_timestamp)
+                    self.startTimeLabel.setText(f"Start: {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+                else:
+                    self.startTimeLabel.setText(f"Start: {self.recording_start_timestamp}")
+            except Exception:
+                self.startTimeLabel.setText("Start: --:--:--")
+        elif self.startTimeLabel is not None:
+            self.startTimeLabel.setText("Start: --:--:--")
+        
+        # Update current time label based on frame index and FPS
+        if self.currentTimeLabel is not None:
+            if self.recording_fps is not None and self.recording_fps > 0:
+                time_offset = frame_index / self.recording_fps
+                self.currentTimeLabel.setText(f"Time: {self._format_time_offset(time_offset)}")
+            else:
+                self.currentTimeLabel.setText("Time: --:--")
+
+    def _setup_time_labels(self):
+        """Create and add time labels to the browser bar."""
+        # Remove existing labels if any
+        if self.startTimeLabel is not None:
+            try:
+                self.startTimeLabel.deleteLater()
+            except Exception:
+                pass
+            self.startTimeLabel = None
+        if self.currentTimeLabel is not None:
+            try:
+                self.currentTimeLabel.deleteLater()
+            except Exception:
+                pass
+            self.currentTimeLabel = None
+        
+        # Create start time label (left side of browser)
+        self.startTimeLabel = qt.QLabel("Start: --:--:--", self)
+        self.startTimeLabel.setToolTip("Recording start timestamp")
+        self.startTimeLabel.setStyleSheet("QLabel { color: gray; font-family: monospace; }")
+        
+        # Create current time label (right side, after sync button)
+        self.currentTimeLabel = qt.QLabel("Time: --:--", self)
+        self.currentTimeLabel.setToolTip("Current playback time offset from recording start")
+        self.currentTimeLabel.setStyleSheet("QLabel { color: gray; font-family: monospace; }")
+        
+        # Add to browser layout
+        # Insert start label at the beginning (index 0)
+        self.view._browser.mainLayout.insertWidget(0, self.startTimeLabel)
+        # Add current time label at the end
+        self.view._browser.mainLayout.addWidget(self.currentTimeLabel)
+        
+        # Initial update
+        self._update_time_labels(0)
 
     def _stop_camera(self):
         """Stop capture loop, timer, and release camera resources."""
@@ -474,6 +598,26 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         self._recording_dataset_bound = False  # Track if we've bound the dataset
         self.current_h5_path = file_path  # Track for ROI embedding
         
+        # Store recording metadata for time display
+        self.recording_fps = self.camera.getFPS()
+        self.recording_start_timestamp = self.camera.recording_start_time.isoformat() if hasattr(self.camera, 'recording_start_time') else None
+        
+        # Get resolution from camera frame
+        resolution = self.camera.frame_shape if hasattr(self.camera, 'frame_shape') else None
+        
+        # Pass metadata to stats widget for timeseries plot
+        self._statsWidget.setRecordingMetadata(
+            self.recording_fps, 
+            self.recording_start_timestamp,
+            file_path=file_path,
+            resolution=resolution
+        )
+        
+        # Setup time labels if not already created
+        if self.startTimeLabel is None:
+            self._setup_time_labels()
+        self._update_time_labels(0)
+        
         # Update stats widget with recording dataset (will be set properly in camera loop)
         # For now, just notify that we're starting recording
         
@@ -510,6 +654,12 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
         # Clear current H5 path and disable embed
         self.current_h5_path = None
         self._regionManagerWidget.setEmbedEnabled(False)
+        
+        # Clear recording metadata
+        self.recording_fps = None
+        self.recording_start_timestamp = None
+        self._update_time_labels(0)
+        self._statsWidget.setRecordingMetadata(None, None, file_path=None, resolution=None)
         
         # Hide browser controls - back to live preview mode
         self._set_browse_controls_visible(False)
@@ -570,6 +720,8 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
                     # Auto-sync to latest frame if sync button is checked
                     if self.syncButton is not None and self.syncButton.isChecked():
                         self.view.setFrameNumber(frame_count - 1)
+                        # Update time labels during recording
+                        self._update_time_labels(frame_count - 1)
             else:
                 # Live preview mode: update the plot with latest frame
                 if self.camera.latest_frame is not None:
@@ -582,6 +734,12 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
     
     def _on_frame_changed(self, frame_index):
         """Handle frame change in StackView - update stats for new frame."""
+        # Update time labels
+        self._update_time_labels(frame_index)
+        
+        # Update cursor position on timeseries plot
+        self._statsWidget.updateCursorPosition(frame_index)
+        
         # Get current frame data from view
         stack = self.view.getStack(copy=False, returnNumpyArray=False)
         
@@ -613,6 +771,35 @@ class _RoiStatsDisplayExWindow(qt.QMainWindow):
     def _about_menu(self):
         aw = AboutWindow(self)
         aw.show()
+
+    def _setup_view_menu(self):
+        """Set up the View menu with dock widget toggle actions."""
+        if not hasattr(self, '_view_menu') or self._view_menu is None:
+            return
+        
+        # Add toggle actions for dock widgets using Qt's built-in toggleViewAction
+        roi_manager_action = self._roisTabWidgetDockWidget.toggleViewAction()
+        roi_manager_action.setText("ROI Manager")
+        roi_manager_action.setStatusTip("Show/hide the ROI Manager panel")
+        self._view_menu.addAction(roi_manager_action)
+        
+        roi_stats_action = self._roiStatsWindowDockWidget.toggleViewAction()
+        roi_stats_action.setText("ROI Statistics")
+        roi_stats_action.setStatusTip("Show/hide the ROI Statistics panel")
+        self._view_menu.addAction(roi_stats_action)
+        
+        self._view_menu.addSeparator()
+        
+        # Add restore all panels action
+        restore_all_action = qt.QAction("Restore All Panels", self)
+        restore_all_action.setStatusTip("Show all hidden panels")
+        restore_all_action.triggered.connect(self._restore_all_panels)
+        self._view_menu.addAction(restore_all_action)
+
+    def _restore_all_panels(self):
+        """Show all dock widgets that are currently hidden."""
+        self._roisTabWidgetDockWidget.show()
+        self._roiStatsWindowDockWidget.show()
 
     def update_dataset(self, plot, dataset):
         """Update the plot with the new dataset"""
